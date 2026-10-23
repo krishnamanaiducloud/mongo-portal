@@ -1,0 +1,27 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  # Must match the redirect reference in serviceaccount.yml.
+  name: mongo-portal
+  labels:
+    app.kubernetes.io/name: mongo-portal
+  annotations:
+    # MongoDB sessions live in the pod where the user signed in: keep each
+    # browser on one pod.
+    router.openshift.io/cookie_name: mongo_portal_affinity
+    haproxy.router.openshift.io/disable_cookies: "false"
+    haproxy.router.openshift.io/timeout: 120s
+    haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains
+spec:
+  # The cluster assigns the host name. To choose one, uncomment:
+  # host: mongo-portal.REPLACE-apps-domain
+  to:
+    kind: Service
+    name: mongo-portal
+    weight: 100
+  port:
+    targetPort: https
+  tls:
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

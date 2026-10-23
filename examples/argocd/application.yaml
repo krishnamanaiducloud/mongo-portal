@@ -1,0 +1,140 @@
+# Argo CD resources for the MongoDB portal. Apply to the Argo CD namespace
+# (commonly openshift-gitops):  oc apply -n <argocd-namespace> -f application.yaml
+#
+# Scoping guarantees:
+#  * The AppProject only allows the resource kinds the portal creates. Argo CD
+#    therefore cannot create, modify, prune or adopt StatefulSets,
+#    PersistentVolumeClaims, Secrets or any other MongoDB workload object.
+#  * Each Application renders only examples/kustomize/overlays/<env>; pruning applies to
+#    objects Argo CD itself created from that path (tracked by its
+#    app-instance annotation), never to pre-existing resources.
+#  * Production has no automated sync.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: mongo-portal
+spec:
+  description: MongoDB management portal (portal resources only)
+  sourceRepos:
+    - https://github.com/krishnamanaiducloud/mongo-portal.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: mongo-portal-dev
+    - server: https://kubernetes.default.svc
+      namespace: mongo-portal-test
+    - server: https://kubernetes.default.svc
+      namespace: mongo-portal-prod
+  # The portal creates no cluster-scoped objects (the SCCs are managed by the
+  # mongo-cluster project in cluster.yaml).
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Service
+    - group: apps
+      kind: Deployment
+    - group: route.openshift.io
+      kind: Route
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: monitoring.coreos.com
+      kind: ServiceMonitor
+  namespaceResourceBlacklist:
+    - group: apps
+      kind: StatefulSet
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: ""
+      kind: Secret
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mongo-portal-dev
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: mongo-portal
+  source:
+    repoURL: https://github.com/krishnamanaiducloud/mongo-portal.git
+    targetRevision: main
+    path: examples/kustomize/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mongo-portal-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+  ignoreDifferences:
+    - group: route.openshift.io
+      kind: Route
+      jsonPointers:
+        - /spec/host
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mongo-portal-test
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: mongo-portal
+  source:
+    repoURL: https://github.com/krishnamanaiducloud/mongo-portal.git
+    targetRevision: main
+    path: examples/kustomize/overlays/test
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mongo-portal-test
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+  ignoreDifferences:
+    - group: route.openshift.io
+      kind: Route
+      jsonPointers:
+        - /spec/host
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mongo-portal-prod
+  # No resources finalizer: deleting the Application must not cascade.
+spec:
+  project: mongo-portal
+  source:
+    repoURL: https://github.com/krishnamanaiducloud/mongo-portal.git
+    # Pin production to a reviewed release tag or commit.
+    targetRevision: main
+    path: examples/kustomize/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mongo-portal-prod
+  # Manual sync only: a human approves every production change in Argo CD.
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+  ignoreDifferences:
+    - group: route.openshift.io
+      kind: Route
+      jsonPointers:
+        - /spec/host

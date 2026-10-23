@@ -1,0 +1,53 @@
+# Portal configuration for dev. See docs/configuration.md.
+environment: dev
+server:
+  listenAddress: 0.0.0.0:8443
+  opsListenAddress: 0.0.0.0:9090
+  tls:
+    certFile: /etc/tls/private/tls.crt
+    keyFile: /etc/tls/private/tls.key
+  hsts: true
+identity:
+  # OpenShift login when the cluster OAuth server is reachable; MongoDB-only
+  # login otherwise. Set requireSSO: true to refuse MongoDB-only logins.
+  openshift:
+    enabled: auto
+  requireSSO: false
+  # Optional: offer an IdP logout link after signing out of the portal.
+  # ssoLogoutURL: https://REPLACE-idp/logout
+rbac:
+  # Groups and roles: mongo-portal-rbac ConfigMap (patch-rbac.yaml).
+  policyDir: /etc/mongo-portal/rbac
+session:
+  keyFile: /etc/mongo-portal/session/session-key
+  idleTimeout: 30m
+  absoluteTimeout: 8h
+query:
+  defaultMaxTime: 10s
+  maxMaxTime: 60s
+profiles:
+  # The existing MongoDB deployment has TLS disabled. Plaintext is accepted in
+  # non-production environments; the UI shows a permanent warning.
+  - name: primary
+    displayName: Dev replica set
+    description: Existing MongoDB replica set (no TLS)
+    uri: mongodb://REPLACE-mongodb-host-0:27017,REPLACE-mongodb-host-1:27017,REPLACE-mongodb-host-2:27017/
+    replicaSet: REPLACE-replica-set
+    defaultAuthSource: admin
+    authMechanisms: [SCRAM-SHA-256, SCRAM-SHA-1]
+    readPreference: primaryPreferred
+    tls:
+      mode: disabled
+  # Example TLS profile. Requires the mongo-portal-mongodb-ca ConfigMap (key
+  # ca.crt) and, for mutual TLS, the mongo-portal-mongodb-client Secret.
+  # - name: primary-tls
+  #   displayName: Dev replica set (TLS)
+  #   uri: mongodb://REPLACE-mongodb-host-0:27017,REPLACE-mongodb-host-1:27017/
+  #   replicaSet: REPLACE-replica-set
+  #   tls:
+  #     mode: enabled
+  #     verifyServerCertificate: true
+  #     caFile: /etc/mongo-portal/mongodb-ca/ca.crt
+  #     clientCertFile: /etc/mongo-portal/mongodb-client/tls.crt
+  #     clientKeyFile: /etc/mongo-portal/mongodb-client/tls.key
+  #     minVersion: "1.2"

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Cluster-scoped prerequisite, applied once per cluster by a cluster
+# administrator (or the cluster-admin Argo CD application): the
+# SecurityContextConstraints used by the portal pods and the ClusterRole that
+# allows using it. Namespaces grant "use" to their ServiceAccount with a
+# RoleBinding in the overlays.
+resources:
+  - scc-mongo-portal.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: mongo-portal
+      app.kubernetes.io/managed-by: argocd

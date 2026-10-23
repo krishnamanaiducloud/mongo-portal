@@ -1,0 +1,25 @@
+version: 2
+updates:
+- package-ecosystem: gomod
+  directory: '/'
+  schedule:
+    interval: weekly
+  groups:
+    go-patterns:
+      update-types: [patch, minor]
+- package-ecosystem: npm
+  directory: '/web'
+  schedule:
+    interval: weekly
+  versioning-strategy: increase
+  groups:
+    web-patterns:
+      update-types: [patch, minor]
+- package-ecosystem: docker
+  directory: '/'
+  schedule:
+    interval: weekly
+- package-ecosystem: github-actions
+  directory: '/'
+  schedule:
+    interval: weekly

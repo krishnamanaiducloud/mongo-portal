@@ -1,0 +1,38 @@
+# Who may do what in the portal, in the format of Argo CD's argocd-rbac-cm.
+# Re-read every 30 seconds: edit, oc apply, wait. No restart needed, and an
+# invalid edit is rejected while the previous policy stays active.
+#
+#   p, <role>, <resource>, <action>, <object>[, allow|deny]
+#   g, <user or group>, <role>
+#
+# Built-in roles:
+#   role:mongodb   follow the user's MongoDB privileges (MongoDB decides)
+#   role:readonly  browse, query, shell without writes
+#   role:editor    + document/index changes, create collections
+#   role:admin     everything, incl. other users' audit events
+# Objects: "<db>" or "<db>/<collection>", '*' glob. A user mapped by a "g"
+# line gets exactly the mapped roles; unmapped users get policy.default.
+# MongoDB still checks every operation with the user's own MongoDB account,
+# so the portal can only narrow access. Full reference: docs/rbac.md
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-portal-rbac
+  labels:
+    app.kubernetes.io/name: mongo-portal
+data:
+  # Role of signed-in users no "g" line maps. role:mongodb = whatever their
+  # MongoDB user may do. Use role:readonly to cap them, "" to deny.
+  policy.default: role:mongodb
+  policy.csv: |
+    # OpenShift groups (oc get groups)
+    g, REPLACE-sre-group, role:admin
+    # Developers follow their MongoDB privileges; use role:readonly to cap them.
+    g, REPLACE-developer-group, role:mongodb
+
+    # Used while OpenShift login is unavailable (MongoDB-only sign-in):
+    # g, mongodb:REPLACE-sre-mongodb-user@admin, role:admin
+
+    # Example: one team may change one collection only
+    # p, role:orders-team, documents, *, app/orders, allow
+    # g, REPLACE-orders-group, role:orders-team

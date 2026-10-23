@@ -1,0 +1,70 @@
+# Ingress: only the OpenShift router may reach the portal (HTTPS 8443), and
+# only cluster monitoring may scrape metrics (9090).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongo-portal-ingress
+  labels:
+    app.kubernetes.io/name: mongo-portal
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-portal
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/ingress: ""
+      ports:
+        - port: 8443
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+---
+# Egress: DNS, your MongoDB pods, and the Kubernetes API / OpenShift OAuth
+# server (443/6443) for "Log in with OpenShift". Without the last rule the
+# OpenShift login is simply not offered and MongoDB login keeps working.
+#
+# REPLACE the MongoDB namespace and pod label with your values:
+#   oc get statefulset -A | grep -i mongo
+#   oc get pods -n <mongodb-namespace> --show-labels
+# If your MongoDB pods use another label key, change the key as well.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongo-portal-egress
+  labels:
+    app.kubernetes.io/name: mongo-portal
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-portal
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - { port: 5353, protocol: UDP }
+        - { port: 5353, protocol: TCP }
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: REPLACE-mongodb-namespace
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: REPLACE-mongodb-pod-label
+      ports:
+        - { port: 27017, protocol: TCP }
+    - ports:
+        - { port: 6443, protocol: TCP }
+        - { port: 443, protocol: TCP }

@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo-portal
+  labels:
+    app.kubernetes.io/name: mongo-portal
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-portal
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongo-portal
+      annotations:
+        # Run only under the dedicated SCC from scc.yml (remove this line to
+        # use the built-in restricted-v2 SCC instead).
+        openshift.io/required-scc: mongo-portal-restricted
+    spec:
+      serviceAccountName: mongo-portal
+      # The token is the OAuth client secret of "Log in with OpenShift".
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 45
+      # No runAsUser / fsGroup: OpenShift assigns a UID from the namespace
+      # range; the image runs as any UID with GID 0.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongo-portal
+      containers:
+        - name: portal
+          # mongo-portal 0.4.0, pinned by digest (multi-arch). The diagnostic
+          # variant with troubleshooting tools is ...:0.4.0-debug.
+          image: docker.io/mohankrishna999/mongo-express@sha256:a35cb8b2bba1b5bb89c4487033120020b5fc4c407eaa987b4e34b7c0c8bb7cfb
+          imagePullPolicy: IfNotPresent
+          args: ["--config=/etc/mongo-portal/config/config.yaml"]
+          env:
+            - name: PORTAL_SESSION_KEY_FILE
+              value: /etc/mongo-portal/session/session-key
+            - name: GOMEMLIMIT
+              value: 450MiB
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 2
+            failureThreshold: 30
+          # Readiness does not depend on MongoDB or OpenShift login; both are
+          # reported in the UI instead.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mongo-portal/config
+              readOnly: true
+            - name: rbac
+              mountPath: /etc/mongo-portal/rbac
+              readOnly: true
+            - name: session-key
+              mountPath: /etc/mongo-portal/session
+              readOnly: true
+            - name: serving-cert
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: mongodb-ca
+              mountPath: /etc/mongo-portal/mongodb-ca
+              readOnly: true
+            - name: mongodb-client-cert
+              mountPath: /etc/mongo-portal/mongodb-client
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: mongo-portal-config                 # configmap.yml
+        - name: rbac
+          configMap:
+            name: mongo-portal-rbac                   # rbac-configmap.yml
+            optional: true
+        - name: session-key
+          secret:
+            secretName: mongo-portal-session          # session-secret.yml
+            optional: true
+        - name: serving-cert
+          secret:
+            secretName: mongo-portal-tls              # created by the OpenShift service CA (service.yml)
+        # Only for MongoDB TLS: the CA that signed the MongoDB certificates
+        #   oc create configmap mongo-portal-mongodb-ca --from-file=ca.crt=./ca.pem
+        - name: mongodb-ca
+          configMap:
+            name: mongo-portal-mongodb-ca
+            optional: true
+        # Only for MongoDB mutual TLS: oc create secret tls mongo-portal-mongodb-client ...
+        - name: mongodb-client-cert
+          secret:
+            secretName: mongo-portal-mongodb-client
+            optional: true
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

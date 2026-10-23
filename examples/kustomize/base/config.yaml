@@ -1,0 +1,34 @@
+# Base portal configuration (documented defaults). Environment overlays replace
+# this file through configMapGenerator; the generated name carries a content
+# hash so configuration changes roll the Deployment.
+environment: base
+server:
+  listenAddress: 0.0.0.0:8443        # HTTPS with the service CA certificate (re-encrypt Route)
+  opsListenAddress: 0.0.0.0:9090     # /healthz /readyz /metrics only
+  tls:
+    certFile: /etc/tls/private/tls.crt
+    keyFile: /etc/tls/private/tls.key
+  hsts: true
+identity:
+  # Built-in OpenShift login (like Argo CD). "auto" offers it whenever the
+  # cluster OAuth server is reachable; otherwise users sign in with MongoDB
+  # credentials only and nothing fails.
+  openshift:
+    enabled: auto
+  requireSSO: false
+rbac:
+  # Policy and default role come from the mongo-portal-rbac ConfigMap
+  # (rbac-policy.yaml), mounted at this path and re-read every 30s.
+  policyDir: /etc/mongo-portal/rbac
+session:
+  keyFile: /etc/mongo-portal/session/session-key
+  idleTimeout: 15m
+  absoluteTimeout: 8h
+profiles:
+  - name: primary
+    displayName: Primary replica set
+    uri: mongodb://REPLACE-mongodb-host-0:27017,REPLACE-mongodb-host-1:27017,REPLACE-mongodb-host-2:27017/
+    replicaSet: REPLACE-replica-set
+    defaultAuthSource: admin
+    tls:
+      mode: disabled

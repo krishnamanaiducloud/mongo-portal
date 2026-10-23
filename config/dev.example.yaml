@@ -1,0 +1,27 @@
+# Local development only. The fixed identity requires
+# PORTAL_ALLOW_INSECURE_DEV_IDENTITY=true; remove the identity.dev block to try
+# MongoDB-only login instead (no SSO).
+environment: local
+server:
+  listenAddress: 127.0.0.1:8080
+  opsListenAddress: 127.0.0.1:9090
+identity:
+  openshift:
+    enabled: "false"
+  dev:
+    enabled: true
+    user: local-developer
+    groups: [sres]
+rbac:
+  policy: |
+    g, sres, role:admin
+    g, devs, role:readonly
+session:
+  secureCookie: false
+  cookieName: mongo_portal_session
+profiles:
+  - name: local
+    displayName: Local MongoDB
+    uri: mongodb://127.0.0.1:27017/
+    tls:
+      mode: disabled

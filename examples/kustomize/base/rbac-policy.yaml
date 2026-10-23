@@ -1,0 +1,36 @@
+# Portal RBAC policy, in the format of Argo CD's argocd-rbac-cm:
+#
+#   p, <role>, <resource>, <action>, <object>[, allow|deny]
+#   g, <subject>, <role>
+#
+# Resources/actions: databases (get, delete), collections (get, create,
+# update, delete), documents (get, create, update, delete), indexes (get,
+# create, delete), shell (use, admin), server (get), audit (get; object
+# "self" or "all"). Objects are globs over "<db>" or "<db>/<collection>".
+# Built-in roles: role:mongodb (follow the user's MongoDB privileges; the
+# default for unmapped users), role:readonly, role:editor, role:admin. A user
+# mapped by a "g" line gets exactly the mapped roles.
+#
+# Subjects: OpenShift user or group names (as in Argo CD), or
+# "mongodb:<user>@<authSource>" for MongoDB-only sign-ins, which are used
+# when OpenShift login is unavailable.
+#
+# The portal re-reads this ConfigMap every 30s (no restart; sessions are
+# kept). An invalid edit is rejected and the previous policy stays active;
+# the status page shows the error. Portal RBAC only narrows access: MongoDB
+# still authorizes every operation with the user's own credentials.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-portal-rbac
+data:
+  policy.default: role:mongodb
+  policy.csv: |
+    g, REPLACE-sre-group, role:admin
+    # Developers follow their MongoDB privileges; use role:readonly to cap them.
+    g, REPLACE-developer-group, role:mongodb
+    # MongoDB-only sign-ins (used while OpenShift login is unavailable):
+    # g, mongodb:REPLACE-sre-mongodb-user@admin, role:admin
+    # Namespace-scoped example:
+    # p, role:orders-team, documents, *, app/orders*, allow
+    # g, REPLACE-orders-group, role:orders-team

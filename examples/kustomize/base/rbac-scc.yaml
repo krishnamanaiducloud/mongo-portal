@@ -1,0 +1,13 @@
+# Grants the portal ServiceAccount use of the mongo-portal-restricted SCC
+# (examples/kustomize/cluster) in this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mongo-portal-scc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mongo-portal-scc-use
+subjects:
+  - kind: ServiceAccount
+    name: mongo-portal

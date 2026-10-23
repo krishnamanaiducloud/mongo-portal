@@ -1,0 +1,13 @@
+# Keeps at least one portal pod running during node drains and upgrades.
+# With replicas: 1 in deployment.yml, change minAvailable to 0.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mongo-portal
+  labels:
+    app.kubernetes.io/name: mongo-portal
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-portal
