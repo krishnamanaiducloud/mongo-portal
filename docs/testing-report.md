@@ -82,6 +82,21 @@ scan time; it is not proof that none exist.
 | GO-2026-5932 | `golang.org/x/crypto` v0.58.0 (`openpgp` package) | Unknown (advisory: package unmaintained) | Not reachable: the portal never imports `x/crypto/openpgp` (govulncheck symbol analysis) | No fixed version exists; the module is required transitively by the MongoDB driver | Keep x/crypto current (Dependabot); the govulncheck gate in CI fails if it becomes reachable | 2027-01-22 |
 | KSV-0125 | Deployment images (docker.io) | Medium | Policy finding, not a vulnerability | Registry choice is site policy | Production pins digests; mirror to an approved registry if required | at production onboarding |
 
+## Published images
+
+Built from a clean `git archive` of commit `9f6a121` with BuildKit for
+linux/amd64 and linux/arm64, with SBOM and `mode=max` provenance attached. The
+tags did not exist before; `latest` is not used.
+
+| Image | Index digest | Verified |
+| --- | --- | --- |
+| `docker.io/mohankrishna999/mongo-portal:0.0.1` | `sha256:422688c71b8b86ff31f5524ec188eb093eddf1d70a2ba8bdd5e3bfb9adb70351` | pulled image reports 0.0.1 (9f6a121), runs as an arbitrary UID with a read-only root filesystem; smoke 74 / 74 and browser e2e PASS on the published image; Trivy by digest: 1 Unknown (GO-2026-5932, above) |
+| `docker.io/mohankrishna999/mongo-portal:0.0.1-debug` | `sha256:db782abadadff8119ce8360a90ed0a94618de3866f4966f60f8dab5b9ab79093` | smoke 74 / 74 (both images); Trivy by digest: 1 Unknown (same) |
+
+The prod overlay and `examples/openshift/deployment.yml` pin the production
+digest; dev uses `0.0.1-debug`, test `0.0.1`. Releases increment the last
+number (0.0.2 next).
+
 ## Not environment-validated (requires an OpenShift cluster)
 
 * The OpenShift OAuth login end to end against a real OAuth server (exercised
