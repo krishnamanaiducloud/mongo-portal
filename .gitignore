@@ -1,0 +1,36 @@
+# Dependencies and build output
+node_modules/
+web/dist/
+internal/webui/dist/*
+!internal/webui/dist/index.html
+/portal
+/bin/
+
+# Test and scan output
+reports/
+coverage.out
+sbom-*.spdx.json
+
+# Local configuration and credentials: never commit
+.env
+.env.*
+*.pem
+*.key
+*.crt
+!test/**/*.crt
+kubeconfig
+.kube/
+.docker/
+config.json
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Assistant and planning notes
+CLAUDE.md
+.claude/
+AGENTS.md

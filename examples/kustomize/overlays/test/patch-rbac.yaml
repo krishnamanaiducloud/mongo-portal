@@ -1,0 +1,14 @@
+# Portal RBAC for test. Replace the group names with the OpenShift groups of
+# this environment (oc get groups). See base/rbac-policy.yaml for the format.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-portal-rbac
+data:
+  policy.default: role:mongodb
+  policy.csv: |
+    g, mongo-portal-sre-test, role:admin
+    # Developers follow their MongoDB privileges; use role:readonly to cap them.
+    g, mongo-portal-developers-test, role:mongodb
+    # MongoDB-only sign-ins used while OpenShift login is unavailable:
+    # g, mongodb:REPLACE-sre-mongodb-user@admin, role:admin

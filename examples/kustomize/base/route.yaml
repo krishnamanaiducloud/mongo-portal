@@ -1,0 +1,24 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mongo-portal
+  annotations:
+    # MongoDB sessions live in the pod that authenticated them: keep each
+    # browser on one pod. If a request reaches another pod, the user is asked
+    # to sign in to MongoDB again (no credentials are shared between pods).
+    router.openshift.io/cookie_name: mongo_portal_affinity
+    haproxy.router.openshift.io/disable_cookies: "false"
+    haproxy.router.openshift.io/timeout: 120s
+    haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains
+spec:
+  # host is assigned by the cluster unless an overlay sets it.
+  to:
+    kind: Service
+    name: mongo-portal
+    weight: 100
+  port:
+    targetPort: https
+  tls:
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

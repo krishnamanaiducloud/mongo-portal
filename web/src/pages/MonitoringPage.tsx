@@ -1,0 +1,937 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { NavLink } from 'react-router';
+import {
+  Alert,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
+  Flex,
+  FlexItem,
+  Grid,
+  GridItem,
+  Label,
+  PageSection,
+  Progress,
+  ProgressMeasureLocation,
+  ProgressVariant,
+  Spinner,
+  Title,
+  ToggleGroup,
+  ToggleGroupItem,
+  Tooltip,
+} from '@patternfly/react-core';
+import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import {
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+  InfoCircleIcon,
+  LockIcon,
+  StarIcon,
+  SyncAltIcon,
+  UnlockIcon,
+} from '@patternfly/react-icons';
+import { useMonitoring, useServerInfo } from '../api/hooks';
+import type { MonitoringInfo, MonMember, MonSection, MonServer } from '../api/types';
+import { formatBytes } from '../lib/ejson';
+import { ErrorState } from './StatusPages';
+
+// ---------- formatting ----------
+
+const nf = new Intl.NumberFormat();
+const fmt = (n: number | undefined) => (n === undefined || Number.isNaN(n) ? '—' : nf.format(Math.round(n)));
+const fmtRate = (n: number) => (n >= 100 ? nf.format(Math.round(n)) : n.toFixed(n >= 10 ? 1 : 2));
+const fmtBytesRate = (n: number) => `${formatBytes(n)}/s`;
+
+function fmtDuration(sec: number | undefined): string {
+  if (sec === undefined || !Number.isFinite(sec)) return '—';
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${Math.floor(sec % 60)}s`;
+  return `${Math.floor(sec)}s`;
+}
+
+function fmtLag(sec: number | undefined): string {
+  if (sec === undefined) return '—';
+  return sec < 1 ? '< 1 s' : fmtDuration(sec);
+}
+
+const pct = (a: number, b: number) => (b > 0 ? Math.min(100, (a / b) * 100) : 0);
+
+// ---------- samples for rates ----------
+
+interface Sample {
+  t: number;
+  host: string;
+  ops: number;
+  bytesIn: number;
+  bytesOut: number;
+  current: number;
+}
+
+interface Rates {
+  ops: number[];
+  bytesIn: number[];
+  bytesOut: number[];
+  conns: number[];
+}
+
+const MAX_SAMPLES = 60;
+
+/** Keeps the recent serverStatus counters and derives per-second rates. */
+function useRates(data: MonitoringInfo | undefined): Rates {
+  const samples = useRef<Sample[]>([]);
+  const [rates, setRates] = useState<Rates>({ ops: [], bytesIn: [], bytesOut: [], conns: [] });
+  const srv = data?.sections.server?.data;
+  const at = data?.collectedAt;
+  useEffect(() => {
+    if (!srv || !at) return;
+    const s: Sample = {
+      t: Date.parse(at),
+      host: srv.host,
+      ops: Object.values(srv.opcounters).reduce((a, b) => a + b, 0),
+      bytesIn: srv.network.bytesIn,
+      bytesOut: srv.network.bytesOut,
+      current: srv.connections.current,
+    };
+    let list = samples.current;
+    const last = list[list.length - 1];
+    if (last && last.t === s.t) return;
+    // A different member (failover, new connection) or a restart resets the series.
+    if (last && (last.host !== s.host || s.ops < last.ops)) list = [];
+    list = [...list, s].slice(-MAX_SAMPLES);
+    samples.current = list;
+    const r: Rates = { ops: [], bytesIn: [], bytesOut: [], conns: list.map((x) => x.current) };
+    for (let i = 1; i < list.length; i++) {
+      const dt = (list[i].t - list[i - 1].t) / 1000;
+      if (dt <= 0) continue;
+      r.ops.push(Math.max(0, (list[i].ops - list[i - 1].ops) / dt));
+      r.bytesIn.push(Math.max(0, (list[i].bytesIn - list[i - 1].bytesIn) / dt));
+      r.bytesOut.push(Math.max(0, (list[i].bytesOut - list[i - 1].bytesOut) / dt));
+    }
+    setRates(r);
+  }, [srv, at]);
+  return rates;
+}
+
+// ---------- small visual pieces ----------
+
+/** Single-series sparkline with a hover readout. */
+function Sparkline({ values, format, label }: { values: number[]; format: (n: number) => string; label: string }) {
+  const [hover, setHover] = useState<number | null>(null);
+  if (values.length < 2) return <div className="portal-spark portal-spark-empty">Collecting samples…</div>;
+  const w = 200;
+  const h = 40;
+  const max = Math.max(...values) || 1;
+  const x = (i: number) => (i / (values.length - 1)) * w;
+  const y = (v: number) => h - 2 - (v / max) * (h - 6);
+  const line = values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+  const shown = hover ?? values.length - 1;
+  return (
+    <div className="portal-spark">
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`${label}, last ${values.length} samples, latest ${format(values[values.length - 1])}, peak ${format(max)}`}
+        onMouseMove={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setHover(Math.round(((e.clientX - r.left) / r.width) * (values.length - 1)));
+        }}
+        onMouseLeave={() => setHover(null)}
+      >
+        <path d={`${line}L${w},${h}L0,${h}Z`} className="portal-spark-area" />
+        <path d={line} className="portal-spark-line" vectorEffect="non-scaling-stroke" />
+        {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={0} y2={h} className="portal-spark-cursor" vectorEffect="non-scaling-stroke" />}
+      </svg>
+      <div className="portal-spark-readout" aria-hidden>
+        {hover === null ? 'now' : `${values.length - 1 - hover} samples ago`} · {format(values[shown])}
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value, unit, sub, children }: { label: string; value: ReactNode; unit?: string; sub?: ReactNode; children?: ReactNode }) {
+  return (
+    <Card isCompact className="portal-stat">
+      <CardBody>
+        <div className="portal-stat-label">{label}</div>
+        <div className="portal-stat-value">
+          {value}
+          {unit && <span className="portal-stat-unit"> {unit}</span>}
+        </div>
+        {sub && <div className="portal-stat-sub">{sub}</div>}
+        {children}
+      </CardBody>
+    </Card>
+  );
+}
+
+function Meter({ title, value, max, label, warn = 75, danger = 90 }: { title: string; value: number; max: number; label: string; warn?: number; danger?: number }) {
+  const p = pct(value, max);
+  const variant = p >= danger ? ProgressVariant.danger : p >= warn ? ProgressVariant.warning : undefined;
+  return (
+    <Progress
+      title={title}
+      value={p}
+      label={label}
+      valueText={`${label} (${p.toFixed(0)}%)`}
+      measureLocation={ProgressMeasureLocation.top}
+      variant={variant}
+      size="sm"
+      className="pf-v6-u-mb-md"
+    />
+  );
+}
+
+/** Explains a section that could not be collected. */
+function SectionNote({ s, what }: { s: MonSection<unknown> | undefined; what: string }) {
+  if (!s?.error) return null;
+  const unauthorized = s.code === 'mongo_unauthorized';
+  return (
+    <Alert
+      isInline
+      isPlain
+      variant={unauthorized ? 'info' : 'warning'}
+      title={unauthorized ? `${what} needs more MongoDB privileges` : `${what} is unavailable`}
+      className="pf-v6-u-mb-sm"
+    >
+      {s.error}
+    </Alert>
+  );
+}
+
+function MemberState({ m }: { m: MonMember }) {
+  if (m.health === 0 || ['DOWN', 'UNKNOWN', 'REMOVED'].includes(m.state)) {
+    return (
+      <Label color="red" icon={<ExclamationCircleIcon />} isCompact>
+        {m.state || 'DOWN'}
+      </Label>
+    );
+  }
+  switch (m.state) {
+    case 'PRIMARY':
+      return (
+        <Label color="green" icon={<StarIcon />} isCompact>
+          Primary
+        </Label>
+      );
+    case 'SECONDARY':
+      return (
+        <Label color="blue" icon={<CheckCircleIcon />} isCompact>
+          Secondary
+        </Label>
+      );
+    case 'ARBITER':
+      return (
+        <Label color="grey" isCompact>
+          Arbiter
+        </Label>
+      );
+    default:
+      return (
+        <Label color="orange" icon={<ExclamationTriangleIcon />} isCompact>
+          {m.state}
+        </Label>
+      );
+  }
+}
+
+function LagCell({ m }: { m: MonMember }) {
+  if (m.state === 'PRIMARY' || m.arbiterOnly) return <>—</>;
+  const lag = m.lagSeconds;
+  if (lag === undefined) return <>—</>;
+  if (lag >= 60)
+    return (
+      <span className="portal-status-danger">
+        <ExclamationCircleIcon /> {fmtLag(lag)}
+      </span>
+    );
+  if (lag >= 10)
+    return (
+      <span className="portal-status-warning">
+        <ExclamationTriangleIcon /> {fmtLag(lag)}
+      </span>
+    );
+  return <>{fmtLag(lag)}</>;
+}
+
+// ---------- sections ----------
+
+function ReplicaSetCard({ data, hello }: { data: MonitoringInfo; hello?: HelloInfo }) {
+  const sec = data.sections.replicaSet;
+  const rs = sec?.data;
+  const members = rs?.members ?? [];
+  const counts = members.reduce<Record<string, number>>((a, m) => ({ ...a, [m.state]: (a[m.state] ?? 0) + 1 }), {});
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Topology
+          {rs?.set && (
+            <span className="portal-card-sub">
+              {' '}
+              · replica set <strong>{rs.set}</strong>
+              {rs.term !== undefined && <> · term {rs.term}</>}
+            </span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardBody>
+        {rs?.standalone && <div>Standalone server (no replica set).</div>}
+        {members.length > 0 && (
+          <>
+            <Flex gap={{ default: 'gapMd' }} className="pf-v6-u-mb-sm portal-muted">
+              <FlexItem>{members.length} members</FlexItem>
+              <FlexItem>{counts.PRIMARY ?? 0} primary</FlexItem>
+              <FlexItem>{counts.SECONDARY ?? 0} secondary</FlexItem>
+              {counts.ARBITER ? <FlexItem>{counts.ARBITER} arbiter</FlexItem> : null}
+            </Flex>
+            <Table aria-label="Replica set members" variant="compact">
+              <Thead>
+                <Tr>
+                  <Th>Member</Th>
+                  <Th>State</Th>
+                  <Th>Replication lag</Th>
+                  <Th>Ping</Th>
+                  <Th>Syncs from</Th>
+                  <Th>Priority / votes</Th>
+                  <Th>Uptime</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {members.map((m) => (
+                  <Tr key={m.name}>
+                    <Td dataLabel="Member">
+                      <span className="portal-mono">{m.name}</span>
+                      {m.self && (
+                        <Tooltip content="The member the portal is connected to for this request">
+                          <Label isCompact className="pf-v6-u-ml-sm">
+                            connected
+                          </Label>
+                        </Tooltip>
+                      )}
+                      {m.hidden && (
+                        <Label isCompact className="pf-v6-u-ml-sm">
+                          hidden
+                        </Label>
+                      )}
+                      {m.lastHeartbeatMessage && <div className="portal-muted portal-small">{m.lastHeartbeatMessage}</div>}
+                    </Td>
+                    <Td dataLabel="State">
+                      <MemberState m={m} />
+                    </Td>
+                    <Td dataLabel="Replication lag">
+                      <LagCell m={m} />
+                    </Td>
+                    <Td dataLabel="Ping">{m.self ? '—' : `${fmt(m.pingMs)} ms`}</Td>
+                    <Td dataLabel="Syncs from" className="portal-mono">
+                      {m.syncSource || '—'}
+                    </Td>
+                    <Td dataLabel="Priority / votes">
+                      {m.priority !== undefined ? `${m.priority} / ${m.votes ?? '—'}` : '—'}
+                    </Td>
+                    <Td dataLabel="Uptime">{fmtDuration(m.uptimeSeconds)}</Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </>
+        )}
+        {sec?.error && (
+          <>
+            <SectionNote s={sec} what="Replica set status" />
+            {hello?.hosts?.length ? <HelloTopology hello={hello} /> : null}
+          </>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+interface HelloInfo {
+  setName?: string;
+  hosts?: string[];
+  passives?: string[];
+  arbiters?: string[];
+  primary?: string;
+  me?: string;
+  msg?: string;
+}
+
+/** Topology from the hello handshake, available to every user. */
+function HelloTopology({ hello }: { hello: HelloInfo }) {
+  const rows = [
+    ...(hello.hosts ?? []).map((h) => ({ h, role: h === hello.primary ? 'Primary' : 'Secondary' })),
+    ...(hello.passives ?? []).map((h) => ({ h, role: 'Passive secondary' })),
+    ...(hello.arbiters ?? []).map((h) => ({ h, role: 'Arbiter' })),
+  ];
+  return (
+    <>
+      <div className="portal-muted pf-v6-u-mb-sm">
+        From the connection handshake{hello.setName ? <> · replica set <strong>{hello.setName}</strong></> : null}:
+      </div>
+      <Table aria-label="Replica set members from hello" variant="compact">
+        <Thead>
+          <Tr>
+            <Th>Member</Th>
+            <Th>Role</Th>
+          </Tr>
+        </Thead>
+        <Tbody>
+          {rows.map((r) => (
+            <Tr key={r.h}>
+              <Td dataLabel="Member" className="portal-mono">
+                {r.h}
+                {r.h === hello.me && (
+                  <Label isCompact className="pf-v6-u-ml-sm">
+                    connected
+                  </Label>
+                )}
+              </Td>
+              <Td dataLabel="Role">
+                {r.role === 'Primary' ? (
+                  <Label color="green" icon={<StarIcon />} isCompact>
+                    Primary
+                  </Label>
+                ) : (
+                  <Label color={r.role === 'Arbiter' ? 'grey' : 'blue'} isCompact>
+                    {r.role}
+                  </Label>
+                )}
+              </Td>
+            </Tr>
+          ))}
+        </Tbody>
+      </Table>
+    </>
+  );
+}
+
+function ConnectionsCard({ data, srv }: { data: MonitoringInfo; srv?: MonServer }) {
+  const sec = data.sections.connections;
+  const c = sec?.data;
+  const pool = data.session.pool;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Connections</CardTitle>
+      </CardHeader>
+      <CardBody>
+        {srv && (
+          <Meter
+            title="Connections in use on this member"
+            value={srv.connections.current}
+            max={srv.connections.current + srv.connections.available}
+            label={`${fmt(srv.connections.current)} of ${fmt(srv.connections.current + srv.connections.available)}`}
+          />
+        )}
+        {c && (
+          <>
+            <div className="portal-split" role="img" aria-label={`${c.active} active and ${c.idle} idle client connections`}>
+              <span className="portal-split-active" style={{ flexGrow: c.active || 0 }} />
+              <span className="portal-split-idle" style={{ flexGrow: c.idle || 0 }} />
+            </div>
+            <Flex gap={{ default: 'gapLg' }} className="pf-v6-u-mb-md pf-v6-u-mt-sm">
+              <FlexItem>
+                <span className="portal-swatch portal-split-active" /> <strong>{fmt(c.active)}</strong> active
+              </FlexItem>
+              <FlexItem>
+                <span className="portal-swatch portal-split-idle" /> <strong>{fmt(c.idle)}</strong> idle
+              </FlexItem>
+              <FlexItem className="portal-muted">
+                {fmt(c.total)} client connections · {fmt(c.internalThreads)} internal threads
+              </FlexItem>
+            </Flex>
+            <Table aria-label="Connections by client" variant="compact" isStickyHeader>
+              <Thead>
+                <Tr>
+                  <Th>Client host</Th>
+                  <Th>Application</Th>
+                  <Th>User</Th>
+                  <Th>Total</Th>
+                  <Th>Active</Th>
+                  <Th>Idle</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {c.byClient.map((g) => (
+                  <Tr key={`${g.client}|${g.appName}|${g.user}`}>
+                    <Td dataLabel="Client host" className="portal-mono">
+                      {g.client}
+                    </Td>
+                    <Td dataLabel="Application">{g.appName || <span className="portal-muted">unnamed</span>}</Td>
+                    <Td dataLabel="User">{g.user || <span className="portal-muted">—</span>}</Td>
+                    <Td dataLabel="Total">{fmt(g.total)}</Td>
+                    <Td dataLabel="Active">{fmt(g.active)}</Td>
+                    <Td dataLabel="Idle">{fmt(g.idle)}</Td>
+                  </Tr>
+                ))}
+                {c.byClient.length === 0 && (
+                  <Tr>
+                    <Td colSpan={6}>No client connections.</Td>
+                  </Tr>
+                )}
+              </Tbody>
+            </Table>
+            {c.clientGroups > c.byClient.length && (
+              <div className="portal-muted portal-small pf-v6-u-mt-sm">
+                Showing the {c.byClient.length} largest of {c.clientGroups} client groups.
+              </div>
+            )}
+          </>
+        )}
+        <SectionNote s={sec} what="Connection details" />
+        <div className="portal-subhead">Your portal session pool</div>
+        <Flex gap={{ default: 'gapLg' }}>
+          <FlexItem>
+            <strong>{fmt(pool.open)}</strong> open
+          </FlexItem>
+          <FlexItem>
+            <strong>{fmt(pool.inUse)}</strong> in use
+          </FlexItem>
+          <FlexItem>
+            <strong>{fmt(pool.idle)}</strong> idle
+          </FlexItem>
+          {data.session.maxPoolSize > 0 && <FlexItem className="portal-muted">limit {fmt(data.session.maxPoolSize)} per member</FlexItem>}
+        </Flex>
+      </CardBody>
+    </Card>
+  );
+}
+
+function ResourcesCard({ data, srv }: { data: MonitoringInfo; srv?: MonServer }) {
+  const host = data.sections.host?.data;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Resources</CardTitle>
+      </CardHeader>
+      <CardBody>
+        {srv && (
+          <>
+            {srv.cache.maxBytes > 0 && (
+              <Meter
+                title="WiredTiger cache"
+                value={srv.cache.bytesInCache}
+                max={srv.cache.maxBytes}
+                label={`${formatBytes(srv.cache.bytesInCache)} of ${formatBytes(srv.cache.maxBytes)}`}
+                warn={85}
+                danger={95}
+              />
+            )}
+            {srv.cache.maxBytes > 0 && (
+              <Meter
+                title="Dirty cache"
+                value={srv.cache.dirtyBytes}
+                max={srv.cache.maxBytes}
+                label={formatBytes(srv.cache.dirtyBytes)}
+                warn={5}
+                danger={20}
+              />
+            )}
+            {host?.memSizeMB ? (
+              <Meter
+                title="Resident memory"
+                value={srv.memoryMB.resident}
+                max={host.memLimitMB || host.memSizeMB}
+                label={`${formatBytes(srv.memoryMB.resident * 1048576)} of ${formatBytes((host.memLimitMB || host.memSizeMB) * 1048576)}`}
+              />
+            ) : null}
+            <DescriptionList isCompact isHorizontal columnModifier={{ default: '2Col' }}>
+              <Desc term="Read / write queue">
+                {fmt(srv.queue.readers)} / {fmt(srv.queue.writers)}
+              </Desc>
+              <Desc term="Active readers / writers">
+                {fmt(srv.activeClients.readers)} / {fmt(srv.activeClients.writers)}
+              </Desc>
+              <Desc term="Open transactions">{fmt(srv.transactions.currentOpen)}</Desc>
+              <Desc term="Committed / aborted">
+                {fmt(srv.transactions.totalCommitted)} / {fmt(srv.transactions.totalAborted)}
+              </Desc>
+              <Desc term="Virtual memory">{formatBytes(srv.memoryMB.virtual * 1048576)}</Desc>
+              <Desc term="Rejected connections">{fmt(srv.connections.rejected)}</Desc>
+              <Desc term="Asserts (regular / warning / user)">
+                {fmt(srv.asserts.regular)} / {fmt(srv.asserts.warning)} / {fmt(srv.asserts.user)}
+              </Desc>
+              <Desc term="Connections created">{fmt(srv.connections.totalCreated)}</Desc>
+            </DescriptionList>
+          </>
+        )}
+        <SectionNote s={data.sections.server} what="Server status" />
+        {host && (
+          <>
+            <div className="portal-subhead">Host</div>
+            <DescriptionList isCompact isHorizontal columnModifier={{ default: '2Col' }}>
+              <Desc term="Hostname">
+                <span className="portal-mono">{host.hostname}</span>
+              </Desc>
+              <Desc term="OS">{host.os || '—'}</Desc>
+              <Desc term="CPU">
+                {fmt(host.numCores)} cores · {host.cpuArch}
+              </Desc>
+              <Desc term="Memory">
+                {formatBytes(host.memSizeMB * 1048576)}
+                {host.memLimitMB && host.memLimitMB < host.memSizeMB ? ` (limit ${formatBytes(host.memLimitMB * 1048576)})` : ''}
+              </Desc>
+            </DescriptionList>
+          </>
+        )}
+        <SectionNote s={data.sections.host} what="Host information" />
+      </CardBody>
+    </Card>
+  );
+}
+
+function Desc({ term, children }: { term: string; children: ReactNode }) {
+  return (
+    <DescriptionListGroup>
+      <DescriptionListTerm>{term}</DescriptionListTerm>
+      <DescriptionListDescription>{children}</DescriptionListDescription>
+    </DescriptionListGroup>
+  );
+}
+
+function OpcountersCard({ srv, rates }: { srv: MonServer; rates: Rates }) {
+  const entries = Object.entries(srv.opcounters) as [keyof MonServer['opcounters'], number][];
+  const total = entries.reduce((a, [, v]) => a + v, 0);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Operations <span className="portal-card-sub">· since start</span>
+        </CardTitle>
+      </CardHeader>
+      <CardBody>
+        <Table aria-label="Operation counters" variant="compact">
+          <Thead>
+            <Tr>
+              <Th>Type</Th>
+              <Th>Count</Th>
+              <Th>Share</Th>
+            </Tr>
+          </Thead>
+          <Tbody>
+            {entries.map(([k, v]) => (
+              <Tr key={k}>
+                <Td dataLabel="Type">{k}</Td>
+                <Td dataLabel="Count">{fmt(v)}</Td>
+                <Td dataLabel="Share">
+                  <div className="portal-bar" title={`${pct(v, total).toFixed(1)}%`}>
+                    <span style={{ width: `${pct(v, total)}%` }} />
+                  </div>
+                </Td>
+              </Tr>
+            ))}
+          </Tbody>
+        </Table>
+        <div className="portal-muted portal-small pf-v6-u-mt-sm">
+          {rates.ops.length ? `${fmtRate(rates.ops[rates.ops.length - 1])} operations/s now` : 'Rates appear after the next refresh.'}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function OperationsCard({ data }: { data: MonitoringInfo }) {
+  const c = data.sections.connections?.data;
+  if (!c) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Active operations <span className="portal-card-sub">· longest running first, excluding this portal</span>
+        </CardTitle>
+      </CardHeader>
+      <CardBody>
+        {c.operations.length === 0 ? (
+          <div className="portal-muted">
+            <CheckCircleIcon className="portal-status-success" /> No client operations running right now.
+          </div>
+        ) : (
+          <Table aria-label="Active operations" variant="compact">
+            <Thead>
+              <Tr>
+                <Th>Op</Th>
+                <Th>Namespace</Th>
+                <Th>Running</Th>
+                <Th>Client</Th>
+                <Th>User</Th>
+                <Th>Plan</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {c.operations.map((o, i) => (
+                <Tr key={`${String(o.opid)}-${i}`}>
+                  <Td dataLabel="Op">
+                    {o.op}
+                    {o.waitingForLock && (
+                      <Label color="orange" isCompact icon={<ExclamationTriangleIcon />} className="pf-v6-u-ml-sm">
+                        waiting for lock
+                      </Label>
+                    )}
+                  </Td>
+                  <Td dataLabel="Namespace" className="portal-mono">
+                    {o.ns || '—'}
+                  </Td>
+                  <Td dataLabel="Running">{fmtDuration(o.secsRunning)}</Td>
+                  <Td dataLabel="Client" className="portal-mono">
+                    {o.client}
+                    {o.appName && <div className="portal-muted portal-small">{o.appName}</div>}
+                  </Td>
+                  <Td dataLabel="User">{o.user || '—'}</Td>
+                  <Td dataLabel="Plan" className="portal-mono">
+                    {o.planSummary || '—'}
+                  </Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function DatabasesCard({ data }: { data: MonitoringInfo }) {
+  const sec = data.sections.databases;
+  const d = sec?.data;
+  const max = Math.max(1, ...(d?.databases ?? []).map((x) => x.sizeOnDisk));
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Storage
+          {d && (
+            <span className="portal-card-sub">
+              {' '}
+              · {formatBytes(d.totalSize)} on disk
+            </span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardBody>
+        {d && (
+          <>
+            {d.visibleSize < d.totalSize && (
+              <div className="portal-muted portal-small pf-v6-u-mb-sm">
+                {formatBytes(d.visibleSize)} in the databases your portal role shows; the total covers every database MongoDB lists for you.
+              </div>
+            )}
+            <Table aria-label="Database sizes" variant="compact">
+              <Thead>
+                <Tr>
+                  <Th>Database</Th>
+                  <Th>Size on disk</Th>
+                  <Th>Share of total</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {d.databases.map((x) => (
+                  <Tr key={x.name}>
+                    <Td dataLabel="Database">
+                      <NavLink to={`/db/${encodeURIComponent(x.name)}`}>{x.name}</NavLink>
+                    </Td>
+                    <Td dataLabel="Size on disk">{formatBytes(x.sizeOnDisk)}</Td>
+                    <Td dataLabel="Share of total">
+                      <Flex alignItems={{ default: 'alignItemsCenter' }} gap={{ default: 'gapSm' }} flexWrap={{ default: 'nowrap' }}>
+                        <div className="portal-bar">
+                          <span style={{ width: `${pct(x.sizeOnDisk, max)}%` }} />
+                        </div>
+                        <span className="portal-small portal-muted">{pct(x.sizeOnDisk, d.totalSize).toFixed(1)}%</span>
+                      </Flex>
+                    </Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </>
+        )}
+        <SectionNote s={sec} what="Database sizes" />
+      </CardBody>
+    </Card>
+  );
+}
+
+// ---------- page ----------
+
+const INTERVALS: [string, number | false][] = [
+  ['Off', false],
+  ['5s', 5000],
+  ['10s', 10_000],
+  ['30s', 30_000],
+];
+
+function Ago({ at }: { at: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const s = Math.max(0, Math.round((now - Date.parse(at)) / 1000));
+  return <>{s < 2 ? 'just now' : `${s}s ago`}</>;
+}
+
+export function MonitoringPage() {
+  const [interval, setIntervalMs] = useState<number | false>(10_000);
+  const q = useMonitoring(interval);
+  const info = useServerInfo();
+  const rates = useRates(q.data);
+  const hello = (info.data?.server as { hello?: HelloInfo } | undefined)?.hello;
+  const build = (info.data?.server as { build?: { version?: string } } | undefined)?.build;
+
+  const header = (
+    <Flex alignItems={{ default: 'alignItemsCenter' }} gap={{ default: 'gapMd' }} className="pf-v6-u-mb-md">
+      <Title headingLevel="h1">Monitoring</Title>
+      {q.data && (
+        <>
+          <Label isCompact>Profile {q.data.profile}</Label>
+          <Label isCompact color={q.data.tls ? 'green' : 'orange'} icon={q.data.tls ? <LockIcon /> : <UnlockIcon />}>
+            {q.data.tls ? 'TLS' : 'Plaintext'}
+          </Label>
+        </>
+      )}
+      <Flex className="pf-v6-u-ml-auto" alignItems={{ default: 'alignItemsCenter' }} gap={{ default: 'gapSm' }}>
+        {q.data && (
+          <span className="portal-muted portal-small" aria-live="off">
+            Updated <Ago at={q.data.collectedAt} />
+          </span>
+        )}
+        <ToggleGroup isCompact aria-label="Refresh interval">
+          {INTERVALS.map(([label, ms]) => (
+            <ToggleGroupItem key={label} text={label} isSelected={interval === ms} onChange={() => setIntervalMs(ms)} />
+          ))}
+        </ToggleGroup>
+        <Tooltip content="Refresh now">
+          <Button variant="plain" aria-label="Refresh now" icon={q.isFetching ? <Spinner size="sm" aria-label="Refreshing" /> : <SyncAltIcon />} onClick={() => void q.refetch()} />
+        </Tooltip>
+      </Flex>
+    </Flex>
+  );
+
+  if (q.isPending)
+    return (
+      <PageSection>
+        {header}
+        <Spinner aria-label="Loading monitoring" />
+      </PageSection>
+    );
+  if (q.isError && !q.data)
+    return (
+      <PageSection>
+        {header}
+        <ErrorState error={q.error} onRetry={() => void q.refetch()} />
+      </PageSection>
+    );
+
+  const data = q.data;
+  const srv = data.sections.server?.data;
+  const conns = data.sections.connections?.data;
+  const dbs = data.sections.databases?.data;
+  const lastOf = (a: number[]) => (a.length ? a[a.length - 1] : undefined);
+  const privileged = ['server', 'replicaSet', 'connections', 'host'] as const;
+  const missing = privileged.filter((k) => data.sections[k]?.code === 'mongo_unauthorized');
+
+  return (
+    <PageSection>
+      {header}
+      {missing.length === privileged.length && (
+        <Alert variant="info" isInline className="pf-v6-u-mb-md" title="Most monitoring needs the clusterMonitor role">
+          Your MongoDB user can see database sizes and the topology from the connection handshake. Ask a database administrator to grant the
+          built-in <code>clusterMonitor</code> role for server status, replica set health, connections and operations.
+        </Alert>
+      )}
+      {q.isError && (
+        <Alert variant="warning" isInline isPlain className="pf-v6-u-mb-md" title="The last refresh failed; showing the previous values." />
+      )}
+      <Grid hasGutter>
+        <GridItem sm={6} xl={3}>
+          <StatTile
+            label="Connections"
+            value={srv ? fmt(srv.connections.current) : conns ? fmt(conns.total) : '—'}
+            sub={srv ? `${fmt(srv.connections.available)} available · ${fmt(srv.connections.active)} active` : conns ? `${fmt(conns.active)} active · ${fmt(conns.idle)} idle` : 'needs clusterMonitor'}
+          >
+            {srv && <Sparkline values={rates.conns} format={(n) => `${fmt(n)} connections`} label="Current connections" />}
+          </StatTile>
+        </GridItem>
+        <GridItem sm={6} xl={3}>
+          <StatTile
+            label="Operations"
+            value={lastOf(rates.ops) !== undefined ? fmtRate(lastOf(rates.ops)!) : '—'}
+            unit="/s"
+            sub={srv ? `${fmt(srv.activeClients.total)} active clients · queue ${fmt(srv.queue.total)}` : 'needs clusterMonitor'}
+          >
+            {srv && <Sparkline values={rates.ops} format={(n) => `${fmtRate(n)} ops/s`} label="Operations per second" />}
+          </StatTile>
+        </GridItem>
+        <GridItem sm={6} xl={3}>
+          <StatTile
+            label="Network in"
+            value={lastOf(rates.bytesIn) !== undefined ? formatBytes(lastOf(rates.bytesIn)!) : '—'}
+            unit="/s"
+            sub={srv ? `out ${lastOf(rates.bytesOut) !== undefined ? fmtBytesRate(lastOf(rates.bytesOut)!) : '—'} · ${fmt(srv.network.numRequests)} requests` : 'needs clusterMonitor'}
+          >
+            {srv && <Sparkline values={rates.bytesIn} format={fmtBytesRate} label="Network bytes in per second" />}
+          </StatTile>
+        </GridItem>
+        <GridItem sm={6} xl={3}>
+          <StatTile
+            label="Data on disk"
+            value={dbs ? formatBytes(dbs.totalSize) : '—'}
+            sub={
+              <>
+                {dbs ? `${dbs.databases.length} databases` : 'unavailable'}
+                {srv && (
+                  <>
+                    {' '}
+                    · up {fmtDuration(srv.uptimeSeconds)} · {srv.version || build?.version}
+                  </>
+                )}
+                {!srv && build?.version && <> · MongoDB {build.version}</>}
+              </>
+            }
+          />
+        </GridItem>
+        <GridItem span={12}>
+          <ReplicaSetCard data={data} hello={hello} />
+        </GridItem>
+        <GridItem lg={7}>
+          <ConnectionsCard data={data} srv={srv} />
+        </GridItem>
+        <GridItem lg={5}>
+          <ResourcesCard data={data} srv={srv} />
+        </GridItem>
+        <GridItem span={12}>
+          <OperationsCard data={data} />
+        </GridItem>
+        <GridItem lg={7}>
+          <DatabasesCard data={data} />
+        </GridItem>
+        {srv && (
+          <GridItem lg={5}>
+            <OpcountersCard srv={srv} rates={rates} />
+          </GridItem>
+        )}
+      </Grid>
+      <MonitoringFootnote />
+    </PageSection>
+  );
+}
+
+function MonitoringFootnote() {
+  return (
+    <div className="portal-muted portal-small pf-v6-u-mt-md">
+      <InfoCircleIcon /> Collected with your own MongoDB session, so you see what your MongoDB roles allow. Values describe the member the
+      portal is connected to; rates are computed between refreshes.
+    </div>
+  );
+}

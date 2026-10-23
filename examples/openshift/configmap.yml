@@ -1,0 +1,65 @@
+# Portal configuration (no secrets in here). Read at start-up: after changing
+# it run  oc rollout restart deploy/mongo-portal
+# Every key is described in docs/configuration.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-portal-config
+  labels:
+    app.kubernetes.io/name: mongo-portal
+data:
+  config.yaml: |
+    # "production" (or "prod") enables strict start-up checks, including the
+    # TLS decision below. Use another label (for example "dev") elsewhere.
+    environment: production
+    server:
+      listenAddress: 0.0.0.0:8443      # HTTPS with the service CA certificate
+      opsListenAddress: 0.0.0.0:9090   # /healthz /readyz /metrics only
+      tls:
+        certFile: /etc/tls/private/tls.crt
+        keyFile: /etc/tls/private/tls.key
+      hsts: true
+    identity:
+      # "Log in with OpenShift" whenever the cluster OAuth server is reachable;
+      # otherwise users sign in with their own MongoDB credentials only.
+      openshift:
+        enabled: auto
+      # true = refuse MongoDB-only logins (no fallback while OpenShift is down).
+      requireSSO: false
+      # Optional: identity-provider logout page opened after "Sign out".
+      # ssoLogoutURL: https://REPLACE-idp/logout
+    rbac:
+      # Groups and roles come from the mongo-portal-rbac ConfigMap
+      # (rbac-configmap.yml), re-read every 30s.
+      policyDir: /etc/mongo-portal/rbac
+    session:
+      keyFile: /etc/mongo-portal/session/session-key
+      idleTimeout: 15m
+      absoluteTimeout: 8h
+      maxPerUser: 3
+      maxTotal: 200
+    query:
+      defaultMaxTime: 10s
+      maxMaxTime: 60s
+    profiles:
+      # One entry per MongoDB deployment users may connect to. Hosts only:
+      # credentials are typed by each user at login and never stored.
+      - name: primary
+        displayName: Production replica set
+        uri: mongodb://REPLACE-mongodb-host-0:27017,REPLACE-mongodb-host-1:27017,REPLACE-mongodb-host-2:27017/
+        replicaSet: REPLACE-replica-set
+        defaultAuthSource: admin
+        authMechanisms: [SCRAM-SHA-256]
+        readPreference: primaryPreferred
+        # TLS DECISION REQUIRED (environment: production refuses to start until
+        # one is made):
+        #   (a) MongoDB has TLS: use "mode: enabled" with the CA (recommended):
+        #         tls:
+        #           mode: enabled
+        #           caFile: /etc/mongo-portal/mongodb-ca/ca.crt
+        #   (b) MongoDB has no TLS and a security exception is approved: keep
+        #       "mode: disabled" and set plaintextApproved: true with the ticket.
+        tls:
+          mode: disabled
+        plaintextApproved: false
+        securityExceptionRef: ""

@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo-portal
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-portal
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongo-portal
+      annotations:
+        # Admit only under the dedicated SCC (examples/kustomize/cluster); fails loudly
+        # instead of falling back if the RoleBinding is missing.
+        openshift.io/required-scc: mongo-portal-restricted
+    spec:
+      serviceAccountName: mongo-portal
+      # The service account token is the OpenShift OAuth client secret of the
+      # built-in OpenShift login (no cluster API permissions are granted).
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 45
+      # No runAsUser / fsGroup: OpenShift assigns a namespace UID range under
+      # the restricted SCC; the images run with any UID and GID 0.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongo-portal
+      containers:
+        - name: portal
+          image: mongo-portal
+          imagePullPolicy: IfNotPresent
+          args: ["--config=/etc/mongo-portal/config/config.yaml"]
+          env:
+            - name: PORTAL_SESSION_KEY_FILE
+              value: /etc/mongo-portal/session/session-key
+            - name: GOMEMLIMIT
+              value: 450MiB
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 2
+            failureThreshold: 30
+          # Readiness does not depend on MongoDB, OpenShift OAuth or any other
+          # optional integration: those are reported in the UI instead.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mongo-portal/config
+              readOnly: true
+            - name: rbac
+              mountPath: /etc/mongo-portal/rbac
+              readOnly: true
+            - name: session-key
+              mountPath: /etc/mongo-portal/session
+              readOnly: true
+            - name: serving-cert
+              mountPath: /etc/tls/private
+              readOnly: true
+            - name: mongodb-ca
+              mountPath: /etc/mongo-portal/mongodb-ca
+              readOnly: true
+            - name: mongodb-client-cert
+              mountPath: /etc/mongo-portal/mongodb-client
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: mongo-portal-config
+        # RBAC policy (policy.csv, policy.default). Optional:
+        # without it the configured default role applies. Not hashed, so
+        # edits are picked up live without restarting the pods.
+        - name: rbac
+          configMap:
+            name: mongo-portal-rbac
+            optional: true
+        - name: serving-cert
+          secret:
+            secretName: mongo-portal-tls          # created by the OpenShift service CA
+        # Pre-created: key session-key (docs/secrets.md). Optional so a
+        # missing Secret degrades to a per-pod random key (logged) instead of a
+        # pod that cannot start.
+        - name: session-key
+          secret:
+            secretName: mongo-portal-session
+            optional: true
+        # Optional: CA bundle that signed the MongoDB server certificates.
+        - name: mongodb-ca
+          configMap:
+            name: mongo-portal-mongodb-ca
+            optional: true
+        # Optional: client certificate for MongoDB mutual TLS (tls.crt, tls.key).
+        - name: mongodb-client-cert
+          secret:
+            secretName: mongo-portal-mongodb-client
+            optional: true
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

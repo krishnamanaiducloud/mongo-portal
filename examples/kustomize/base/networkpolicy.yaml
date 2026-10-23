@@ -1,0 +1,72 @@
+# Ingress: only the OpenShift router may reach the portal (HTTPS 8443), and
+# only cluster monitoring may scrape metrics (9090).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongo-portal-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-portal
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/ingress: ""
+      ports:
+        - port: 8443
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+---
+# Egress: DNS, the approved MongoDB pods, the Kubernetes API (OAuth
+# discovery and users/~) and the OpenShift OAuth server (token exchange,
+# usually through the ingress router on 443). Overlays MUST patch the
+# MongoDB selector to match the existing MongoDB pods and SHOULD narrow the
+# API rule to the cluster's API endpoint IPs (oc get endpoints kubernetes -n
+# default). If OpenShift is unreachable, OpenShift login is simply not
+# offered and MongoDB login keeps working.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongo-portal-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-portal
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - port: 5353
+          protocol: UDP
+        - port: 5353
+          protocol: TCP
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: REPLACE-mongodb-namespace
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: REPLACE-mongodb-pod-label
+      ports:
+        - port: 27017
+          protocol: TCP
+    - ports:
+        - port: 6443
+          protocol: TCP
+        - port: 443
+          protocol: TCP

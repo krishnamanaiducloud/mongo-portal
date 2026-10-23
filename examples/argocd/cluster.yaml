@@ -1,0 +1,37 @@
+# Cluster-scoped prerequisites (SecurityContextConstraints and the
+# ClusterRoles that allow using them). Requires an Argo CD instance with
+# cluster-admin rights; apply to the Argo CD namespace. Manual sync only.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: mongo-cluster
+spec:
+  description: Cluster-scoped prerequisites for mongo-portal (SCC only)
+  sourceRepos:
+    - https://github.com/krishnamanaiducloud/mongo-portal.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+  clusterResourceWhitelist:
+    - group: security.openshift.io
+      kind: SecurityContextConstraints
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+  namespaceResourceWhitelist: []
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mongo-cluster-prerequisites
+spec:
+  project: mongo-cluster
+  source:
+    repoURL: https://github.com/krishnamanaiducloud/mongo-portal.git
+    targetRevision: main
+    path: examples/kustomize/cluster
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    syncOptions:
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true

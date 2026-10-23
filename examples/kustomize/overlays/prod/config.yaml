@@ -1,0 +1,61 @@
+# Portal configuration for production. See docs/configuration.md.
+environment: production
+server:
+  listenAddress: 0.0.0.0:8443
+  opsListenAddress: 0.0.0.0:9090
+  tls:
+    certFile: /etc/tls/private/tls.crt
+    keyFile: /etc/tls/private/tls.key
+  hsts: true
+identity:
+  # OpenShift login when the cluster OAuth server is reachable; MongoDB-only
+  # login otherwise. Set requireSSO: true to refuse MongoDB-only logins.
+  openshift:
+    enabled: auto
+  requireSSO: false
+  # Optional: offer an IdP logout link after signing out of the portal.
+  # ssoLogoutURL: https://REPLACE-idp/logout
+rbac:
+  # Groups and roles: mongo-portal-rbac ConfigMap (patch-rbac.yaml).
+  policyDir: /etc/mongo-portal/rbac
+session:
+  keyFile: /etc/mongo-portal/session/session-key
+  idleTimeout: 15m
+  absoluteTimeout: 8h
+  maxPerUser: 3
+  maxTotal: 200
+query:
+  defaultMaxTime: 10s
+  maxMaxTime: 60s
+  # $out/$merge for users whose RBAC role may write the target collection.
+  allowWriteStages: false
+login:
+  attemptsPerWindow: 10
+  window: 5m
+  failuresBeforeLock: 5
+  lockDuration: 5m
+profiles:
+  - name: primary
+    displayName: Production replica set
+    uri: mongodb://REPLACE-mongodb-host-0:27017,REPLACE-mongodb-host-1:27017,REPLACE-mongodb-host-2:27017/
+    replicaSet: REPLACE-replica-set
+    defaultAuthSource: admin
+    authMechanisms: [SCRAM-SHA-256]
+    readPreference: primaryPreferred
+    # SECURITY DECISION REQUIRED. The existing MongoDB has TLS disabled, so
+    # usernames, passwords and data cross the network unencrypted. The portal
+    # refuses to start in production with a plaintext profile until either:
+    #   (a) MongoDB TLS is enabled and this block is switched to mode: enabled
+    #       with caFile (recommended), or
+    #   (b) a security exception is approved and recorded below by setting
+    #       plaintextApproved: true and securityExceptionRef: <ticket id>.
+    tls:
+      mode: disabled
+    plaintextApproved: false
+    securityExceptionRef: ""
+    # Option (a):
+    # tls:
+    #   mode: enabled
+    #   verifyServerCertificate: true
+    #   caFile: /etc/mongo-portal/mongodb-ca/ca.crt
+    #   minVersion: "1.2"

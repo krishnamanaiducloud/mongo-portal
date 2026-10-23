@@ -1,0 +1,63 @@
+# Cluster-scoped, applied ONCE per cluster by a cluster-admin:
+#   oc apply -f scc.yml
+#
+# SecurityContextConstraints for the portal pods: as strict as OpenShift's
+# restricted-v2 (namespace UID range, no privilege escalation, all
+# capabilities dropped, RuntimeDefault seccomp, SELinux MustRunAs), plus a
+# mandatory read-only root filesystem and only the volume types the portal
+# uses. The ClusterRole lets a ServiceAccount use it; serviceaccount.yml binds
+# it in your namespace only.
+#
+# Without cluster-admin you can skip this file: the pods also run under the
+# built-in restricted-v2 SCC. Then delete the RoleBinding in serviceaccount.yml
+# and the openshift.io/required-scc annotation in deployment.yml.
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: mongo-portal-restricted
+  annotations:
+    kubernetes.io/description: >-
+      MongoDB portal: restricted-v2 plus mandatory read-only root filesystem
+      and a minimal volume allowlist.
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegeEscalation: false
+allowPrivilegedContainer: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+defaultAllowPrivilegeEscalation: false
+requiredDropCapabilities:
+  - ALL
+readOnlyRootFilesystem: true
+runAsUser:
+  type: MustRunAsRange
+seLinuxContext:
+  type: MustRunAs
+fsGroup:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+seccompProfiles:
+  - runtime/default
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - projected
+  - secret
+priority: null
+users: []
+groups: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mongo-portal-scc-use
+rules:
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    resourceNames: ["mongo-portal-restricted"]
+    verbs: ["use"]
