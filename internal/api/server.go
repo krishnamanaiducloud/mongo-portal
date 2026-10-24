@@ -78,6 +78,9 @@ type Deps struct {
 	AuditChain func(ctx context.Context, pod string, from, limit int64) ([]audit.Event, error)
 	// StoreStatus reports the shared store connection (nil without one).
 	StoreStatus func() map[string]any
+	// Invalidations shares cache invalidations between replicas (nil
+	// without a store).
+	Invalidations CacheInvalidations
 }
 
 // Server is the HTTP API.
@@ -193,6 +196,7 @@ func (s *Server) register() {
 	s.handle("GET", v+"/me", levelPublic, 0, s.handleMe)
 	s.handle("GET", v+"/status", levelPublic, 0, s.handleStatus)
 	s.handle("GET", v+"/profiles", levelPublic, 0, s.handleProfiles)
+	s.handle("GET", v+"/profiles/{name}/diagnostics", levelIdentity, 0, s.handleProfileDiagnostics)
 	s.handle("POST", v+"/session", levelPublic, small, s.handleLogin)
 	s.handle("GET", v+"/session", levelSession, 0, s.handleSessionInfo)
 	s.handle("DELETE", v+"/session", levelSession, 0, s.handleLogout)
@@ -205,6 +209,8 @@ func (s *Server) register() {
 	s.handle("GET", v+"/admin/sessions", levelIdentity, 0, s.handleAdminSessions)
 	s.handle("GET", v+"/settings", levelIdentity, 0, s.handleSettings)
 	s.handle("POST", v+"/admin/sessions/revoke", levelIdentity, small, s.handleAdminRevoke)
+	s.handle("GET", v+"/admin/caches", levelIdentity, 0, s.handleCaches)
+	s.handle("POST", v+"/admin/caches/invalidate", levelIdentity, small, s.handleInvalidateCaches)
 	s.handle("GET", v+"/server", levelSession, 0, s.handleServerInfo)
 	s.handle("GET", v+"/monitoring", levelSession, 0, s.handleMonitoring)
 

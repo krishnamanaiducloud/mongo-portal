@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/krishnamanaiducloud/mongo-portal/internal/config"
@@ -64,6 +65,32 @@ type Resolver struct {
 
 	cacheMu sync.Mutex
 	cache   map[[32]byte]reviewEntry
+	// revalidateBefore: OpenShift sign-ins validated at or before this Unix
+	// time re-check token and groups on their next request.
+	revalidateBefore atomic.Int64
+}
+
+// RevalidateIdentities empties the token review cache and makes every
+// OpenShift sign-in re-check its token and groups at the API server on its
+// next request (for example after group membership changed).
+func (r *Resolver) RevalidateIdentities() {
+	r.cacheMu.Lock()
+	r.cache = map[[32]byte]reviewEntry{}
+	r.cacheMu.Unlock()
+	r.revalidateBefore.Store(r.now().Unix())
+}
+
+// ReviewCacheStats returns the number of cached token reviews and when the
+// last identity revalidation was requested (zero if never).
+func (r *Resolver) ReviewCacheStats() (int, time.Time) {
+	r.cacheMu.Lock()
+	n := len(r.cache)
+	r.cacheMu.Unlock()
+	var at time.Time
+	if v := r.revalidateBefore.Load(); v > 0 {
+		at = time.Unix(v, 0).UTC()
+	}
+	return n, at
 }
 
 type reviewEntry struct {
@@ -189,7 +216,7 @@ func (r *Resolver) Resolve(w http.ResponseWriter, req *http.Request) *Principal 
 		}
 		return &Principal{User: cl.User, Groups: cl.Groups, Source: SourceOIDC, Provider: cl.Provider}
 	}
-	if age := now.Sub(time.Unix(cl.Validated, 0)); age >= r.opts.Config.OpenShift.RevalidateInterval {
+	if age := now.Sub(time.Unix(cl.Validated, 0)); age >= r.opts.Config.OpenShift.RevalidateInterval || cl.Validated <= r.revalidateBefore.Load() {
 		user, groups, err := r.review(req.Context(), cl.Token)
 		switch {
 		case err == nil && user == cl.User:

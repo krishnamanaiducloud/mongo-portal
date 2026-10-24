@@ -48,11 +48,13 @@ import {
   ListIcon,
   UsersIcon,
   KeyboardIcon,
+  LayerGroupIcon,
   LockIcon,
   MoonIcon,
   SearchIcon,
   ServerIcon,
   SunIcon,
+  SyncAltIcon,
   TachometerAltIcon,
   TerminalIcon,
   UnlockIcon,
@@ -61,6 +63,7 @@ import type { Me } from '../api/types';
 import { useCollections, useDatabases, useLogout, useSession, useSignOut } from '../api/hooks';
 import { applyTheme, currentTheme, type Theme } from '../lib/theme';
 import { rememberRecent } from '../lib/recent';
+import { ConnectionPanel } from './ConnectionPanel';
 import { CommandPalette, type PaletteAction } from './CommandPalette';
 import { IdentityLabel, SourceIcon, sourceDescription } from './Indicators';
 import { RolesLabel } from './Permission';
@@ -92,6 +95,7 @@ export function AppLayout({ me }: { me: Me }) {
   const [userOpen, setUserOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [connOpen, setConnOpen] = useState(false);
   const session = useSession();
   const logout = useLogout();
   const signOut = useSignOut();
@@ -184,7 +188,10 @@ export function AppLayout({ me }: { me: Me }) {
         <MastheadBrand>
           <MastheadLogo component={(p) => <NavLink to="/" {...p} />}>
             <span className="portal-brand">
-              <DatabaseIcon /> MongoDB Portal
+              <span className="portal-logo-mark" aria-hidden>
+                <DatabaseIcon />
+              </span>
+              MongoDB Portal
             </span>
           </MastheadLogo>
         </MastheadBrand>
@@ -214,6 +221,11 @@ export function AppLayout({ me }: { me: Me }) {
               )}
               <ToolbarItem>
                 <RolesLabel roles={roles} compact />
+              </ToolbarItem>
+              <ToolbarItem>
+                <Tooltip content="Refresh &amp; connection">
+                  <Button variant="plain" aria-label="Refresh and connection" icon={<SyncAltIcon />} onClick={() => setConnOpen(true)} />
+                </Tooltip>
               </ToolbarItem>
               <ToolbarItem>
                 <Button
@@ -251,6 +263,9 @@ export function AppLayout({ me }: { me: Me }) {
                     </DropdownItem>
                     <DropdownItem key="status" icon={<TachometerAltIcon />} onClick={() => { setUserOpen(false); navigate('/status'); }}>
                       System status
+                    </DropdownItem>
+                    <DropdownItem key="conn" icon={<SyncAltIcon />} onClick={() => { setUserOpen(false); setConnOpen(true); }}>
+                      Refresh &amp; connection
                     </DropdownItem>
                     <DropdownItem key="keys" icon={<KeyboardIcon />} onClick={() => { setUserOpen(false); setShortcutsOpen(true); }}>
                       Keyboard shortcuts
@@ -290,6 +305,7 @@ export function AppLayout({ me }: { me: Me }) {
         </div>
       )}
       <Outlet />
+      <ConnectionPanel isOpen={connOpen} onClose={() => setConnOpen(false)} session={s} />
       <CommandPalette isOpen={paletteOpen} onClose={closePalette} onAction={onPaletteAction} />
       <Modal variant={ModalVariant.small} isOpen={shortcutsOpen} onClose={() => setShortcutsOpen(false)} aria-labelledby="shortcuts-title">
         <ModalHeader title="Keyboard shortcuts" labelId="shortcuts-title" />
@@ -336,21 +352,21 @@ function Sidebar({ me }: { me: Me }) {
       </div>
       <Nav aria-label="Database navigation">
         <NavList>
-          <NavItem icon={<HomeIcon />}>
-            <NavLink to="/" end>
+          <NavItem>
+            <NavLink to="/" end><span className="portal-nav-icon"><HomeIcon /></span>
               Dashboard
             </NavLink>
           </NavItem>
-          <NavItem icon={<ListIcon />}>
-            <NavLink to="/databases">All databases</NavLink>
+          <NavItem>
+            <NavLink to="/databases"><span className="portal-nav-icon"><ListIcon /></span>All databases</NavLink>
           </NavItem>
         </NavList>
         <NavGroup title="Databases">
           {dbs.isPending && <Spinner size="md" className="pf-v6-u-ml-md" aria-label="Loading databases" />}
           <NavList>
             {dbList.map((d) => (
-              <NavItem key={d.name} isActive={d.name === activeDb && !activeColl} icon={<DatabaseIcon />}>
-                <NavLink to={`/db/${encodeURIComponent(d.name)}`}>{d.name}</NavLink>
+              <NavItem key={d.name} isActive={d.name === activeDb && !activeColl}>
+                <NavLink to={`/db/${encodeURIComponent(d.name)}`}><span className="portal-nav-icon"><DatabaseIcon /></span>{d.name}</NavLink>
               </NavItem>
             ))}
           </NavList>
@@ -360,8 +376,8 @@ function Sidebar({ me }: { me: Me }) {
             {colls.isPending && <Spinner size="md" className="pf-v6-u-ml-md" aria-label="Loading collections" />}
             <NavList>
               {collList.map((c) => (
-                <NavItem key={c.name} isActive={c.name === activeColl} icon={<CubeIcon />}>
-                  <NavLink to={`/db/${encodeURIComponent(activeDb)}/${encodeURIComponent(c.name)}`}>{c.name}</NavLink>
+                <NavItem key={c.name} isActive={c.name === activeColl}>
+                  <NavLink to={`/db/${encodeURIComponent(activeDb)}/${encodeURIComponent(c.name)}`}><span className="portal-nav-icon"><CubeIcon /></span>{c.name}</NavLink>
                 </NavItem>
               ))}
             </NavList>
@@ -370,12 +386,12 @@ function Sidebar({ me }: { me: Me }) {
         <Divider />
         <NavGroup title="Work">
           <NavList>
-            <NavItem icon={<TerminalIcon />}>
-              <NavLink to={activeDb ? `/shell?db=${encodeURIComponent(activeDb)}` : '/shell'}>Shell</NavLink>
+            <NavItem>
+              <NavLink to={activeDb ? `/shell?db=${encodeURIComponent(activeDb)}` : '/shell'}><span className="portal-nav-icon"><TerminalIcon /></span>Shell</NavLink>
             </NavItem>
             {(perm('export:create') || perm('import:create')) && (
-              <NavItem icon={<ExchangeAltIcon />}>
-                <NavLink to={activeDb ? `/transfer?db=${encodeURIComponent(activeDb)}${activeColl ? `&coll=${encodeURIComponent(activeColl)}` : ''}` : '/transfer'}>
+              <NavItem>
+                <NavLink to={activeDb ? `/transfer?db=${encodeURIComponent(activeDb)}${activeColl ? `&coll=${encodeURIComponent(activeColl)}` : ''}` : '/transfer'}><span className="portal-nav-icon"><ExchangeAltIcon /></span>
                   Import &amp; export
                 </NavLink>
               </NavItem>
@@ -385,40 +401,45 @@ function Sidebar({ me }: { me: Me }) {
         <NavGroup title="Operate">
           <NavList>
             {perm('monitoring:get') && (
-              <NavItem icon={<ServerIcon />}>
-                <NavLink to="/monitoring">Monitoring</NavLink>
+              <NavItem>
+                <NavLink to="/monitoring"><span className="portal-nav-icon"><ServerIcon /></span>Monitoring</NavLink>
               </NavItem>
             )}
             {perm('operations:get') && (
-              <NavItem icon={<CubesIcon />}>
-                <NavLink to="/operations">Operations</NavLink>
+              <NavItem>
+                <NavLink to="/operations"><span className="portal-nav-icon"><CubesIcon /></span>Operations</NavLink>
               </NavItem>
             )}
-            <NavItem icon={<HistoryIcon />}>
-              <NavLink to="/audit">Audit</NavLink>
+            <NavItem>
+              <NavLink to="/audit"><span className="portal-nav-icon"><HistoryIcon /></span>Audit</NavLink>
             </NavItem>
             {me.permissions['sessions:all'] && (
-              <NavItem icon={<UsersIcon />}>
-                <NavLink to="/admin/sessions">Sessions</NavLink>
+              <NavItem>
+                <NavLink to="/admin/sessions"><span className="portal-nav-icon"><UsersIcon /></span>Sessions</NavLink>
               </NavItem>
             )}
           </NavList>
         </NavGroup>
         <NavGroup title="Security">
           <NavList>
-            <NavItem icon={<LockIcon />}>
-              <NavLink to="/session">My session</NavLink>
+            <NavItem>
+              <NavLink to="/session"><span className="portal-nav-icon"><LockIcon /></span>My session</NavLink>
             </NavItem>
-            <NavItem icon={<ClipboardCheckIcon />}>
-              <NavLink to="/permissions">My permissions</NavLink>
+            <NavItem>
+              <NavLink to="/permissions"><span className="portal-nav-icon"><ClipboardCheckIcon /></span>My permissions</NavLink>
             </NavItem>
-            {me.permissions['settings:get'] && (
-              <NavItem icon={<CogIcon />}>
-                <NavLink to="/settings">Settings</NavLink>
+            {me.permissions['cache:get'] && (
+              <NavItem>
+                <NavLink to="/admin/caches"><span className="portal-nav-icon"><LayerGroupIcon /></span>Caches</NavLink>
               </NavItem>
             )}
-            <NavItem icon={<TachometerAltIcon />}>
-              <NavLink to="/status">System status</NavLink>
+            {me.permissions['settings:get'] && (
+              <NavItem>
+                <NavLink to="/settings"><span className="portal-nav-icon"><CogIcon /></span>Settings</NavLink>
+              </NavItem>
+            )}
+            <NavItem>
+              <NavLink to="/status"><span className="portal-nav-icon"><TachometerAltIcon /></span>System status</NavLink>
             </NavItem>
           </NavList>
         </NavGroup>

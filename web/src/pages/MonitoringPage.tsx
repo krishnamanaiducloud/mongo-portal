@@ -696,7 +696,11 @@ function OperationsCard({ data }: { data: MonitoringInfo }) {
     <Card>
       <CardHeader>
         <CardTitle>
-          Active operations <span className="portal-card-sub">· longest running first, excluding this portal</span>
+          Active operations{' '}
+          <span className="portal-card-sub">
+            · longest running first, excluding this portal
+            {c.expectedWaits ? ` · ${c.expectedWaits} expected waits (change streams, tailable cursors, driver monitoring) are not slow` : ''}
+          </span>
         </CardTitle>
       </CardHeader>
       <CardBody className="pf-v6-u-pt-0 pf-v6-u-pb-0">
@@ -727,6 +731,11 @@ function OperationsCard({ data }: { data: MonitoringInfo }) {
                     {o.waitingForLock && (
                       <Label color="orange" isCompact icon={<ExclamationTriangleIcon />} className="pf-v6-u-ml-sm">
                         waiting for lock
+                      </Label>
+                    )}
+                    {o.expectedWait && (
+                      <Label color="teal" isCompact className="pf-v6-u-ml-sm" title={`${o.expectedWait}; not counted as slow`}>
+                        expected wait
                       </Label>
                     )}
                   </Td>

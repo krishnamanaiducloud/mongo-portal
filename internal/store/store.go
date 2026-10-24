@@ -33,7 +33,7 @@ type Status struct {
 	State     string    `json:"state"` // connected, unavailable, disabled
 	Reason    string    `json:"reason,omitempty"`
 	Database  string    `json:"database,omitempty"`
-	CheckedAt time.Time `json:"checkedAt,omitempty"`
+	CheckedAt time.Time `json:"checkedAt,omitzero"`
 }
 
 // Store is the shared state connection.
@@ -125,13 +125,14 @@ func (s *Store) Run(ctx context.Context) {
 	}
 }
 
-func (s *Store) connect(ctx context.Context) error {
+// dial connects and authenticates the store account (one ping).
+func (s *Store) dial(ctx context.Context) (*mongo.Client, error) {
 	if s.profile == nil {
-		return errors.New("store.profile is not a configured profile")
+		return nil, errors.New("store.profile is not a configured profile")
 	}
 	opts, err := mongoconn.ClientOptions(s.profile, mongoconn.PoolHooks{})
 	if err != nil {
-		return fmt.Errorf("profile: %w", err)
+		return nil, fmt.Errorf("profile: %w", err)
 	}
 	opts.SetAppName("mongo-portal-store")
 	cred := options.Credential{AuthMechanism: s.cfg.Mechanism}
@@ -141,20 +142,84 @@ func (s *Store) connect(ctx context.Context) error {
 		user, err1 := readSecret(s.cfg.UsernameFile)
 		pass, err2 := readSecret(s.cfg.PasswordFile)
 		if err := errors.Join(err1, err2); err != nil {
-			return err
+			return nil, err
 		}
 		cred.Username, cred.Password, cred.PasswordSet, cred.AuthSource = user, pass, true, s.cfg.AuthSource
 	}
 	opts.SetAuth(cred)
 	client, err := mongo.Connect(opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	if err := client.Ping(ctx, readpref.Primary()); err != nil {
+		_ = client.Disconnect(context.Background())
+		return nil, fmt.Errorf("connect: %s", mongoconn.Classify(err).Msg)
+	}
+	return client, nil
+}
+
+// storeActions are the privileges the store account needs on its database.
+var storeActions = []string{"find", "insert", "update", "remove", "createIndex", "listIndexes", "dropIndex"}
+
+// Probe checks, without writing, that the store account can sign in and
+// holds the privileges the store needs on its database.
+func Probe(ctx context.Context, cfg *config.Config) (string, error) {
+	s := New(cfg, slog.New(slog.DiscardHandler))
+	client, err := s.dial(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.Disconnect(context.Background()) }()
+	var st struct {
+		AuthInfo struct {
+			Privileges []struct {
+				Resource struct {
+					DB         *string `bson:"db"`
+					Collection *string `bson:"collection"`
+					Cluster    bool    `bson:"cluster"`
+				} `bson:"resource"`
+				Actions []string `bson:"actions"`
+			} `bson:"authenticatedUserPrivileges"`
+		} `bson:"authInfo"`
+	}
+	cmd := bson.D{{Key: "connectionStatus", Value: 1}, {Key: "showPrivileges", Value: true}}
+	if err := client.Database("admin").RunCommand(ctx, cmd).Decode(&st); err != nil {
+		return "", fmt.Errorf("connectionStatus: %s", mongoconn.Classify(err).Msg)
+	}
+	have := map[string]bool{}
+	for _, p := range st.AuthInfo.Privileges {
+		db, coll := p.Resource.DB, p.Resource.Collection
+		if db == nil || coll == nil || (*db != "" && *db != cfg.Store.Database) || *coll != "" {
+			continue
+		}
+		for _, a := range p.Actions {
+			have[a] = true
+		}
+	}
+	var missing []string
+	for _, a := range storeActions {
+		if !have[a] {
+			missing = append(missing, a)
+		}
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("signed in, but the account lacks %s on database %q (grant readWrite on it)", strings.Join(missing, ", "), cfg.Store.Database)
+	}
+	detail := "signed in; readWrite privileges on " + cfg.Store.Database + " (nothing written)"
+	if !have["collMod"] {
+		// readWrite lacks collMod; it is only used to change an existing
+		// audit retention, which the database administrator can also do.
+		detail += "; without collMod, a later change of audit.retention must be applied by a database administrator"
+	}
+	return detail, nil
+}
+
+func (s *Store) connect(ctx context.Context) error {
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if err := client.Ping(cctx, readpref.Primary()); err != nil {
-		_ = client.Disconnect(context.Background())
-		return fmt.Errorf("connect: %s", mongoconn.Classify(err).Msg)
+	client, err := s.dial(cctx)
+	if err != nil {
+		return err
 	}
 	db := client.Database(s.cfg.Database)
 	if err := s.prepare(cctx, db); err != nil {
@@ -191,6 +256,12 @@ func (s *Store) prepare(ctx context.Context, db *mongo.Database) error {
 	if err != nil {
 		return fmt.Errorf("session registry indexes: %s", mongoconn.Classify(err).Msg)
 	}
+	// Cache invalidations only need to outlive the replicas' sync interval.
+	_, err = db.Collection(cachesColl).Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "at", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(7 * 24 * 3600).SetName("at_ttl")})
+	if err != nil {
+		return fmt.Errorf("cache invalidation index: %s", mongoconn.Classify(err).Msg)
+	}
 	return nil
 }
 
@@ -220,8 +291,16 @@ func (s *Store) retention(ctx context.Context, db *mongo.Database, ac *mongo.Col
 			Options: options.Index().SetName(name).SetExpireAfterSeconds(secs)})
 		return err
 	case existing.ExpireAfterSeconds == nil || *existing.ExpireAfterSeconds != secs:
-		return db.RunCommand(ctx, bson.D{{Key: "collMod", Value: s.audit.Collection},
+		err := db.RunCommand(ctx, bson.D{{Key: "collMod", Value: s.audit.Collection},
 			{Key: "index", Value: bson.D{{Key: "name", Value: name}, {Key: "expireAfterSeconds", Value: secs}}}}).Err()
+		if err != nil && mongoconn.Classify(err).Kind == mongoconn.KindUnauthorized {
+			// readWrite has no collMod: keep the store usable with the old
+			// retention and tell the operator what to run.
+			s.log.Warn("audit retention not changed: the store account lacks collMod; a database administrator can apply it",
+				"collection", s.audit.Collection, "expireAfterSeconds", secs)
+			return nil
+		}
+		return err
 	}
 	return nil
 }

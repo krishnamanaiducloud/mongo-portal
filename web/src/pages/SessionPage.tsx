@@ -91,12 +91,6 @@ export function SessionPage({ me }: { me: Me }) {
                     </DescriptionListDescription>
                   </DescriptionListGroup>
                 )}
-                <DescriptionListGroup>
-                  <DescriptionListTerm>Portal version</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    {me.build.version} ({me.build.commit.slice(0, 12)})
-                  </DescriptionListDescription>
-                </DescriptionListGroup>
               </DescriptionList>
             </CardBody>
           </Card>

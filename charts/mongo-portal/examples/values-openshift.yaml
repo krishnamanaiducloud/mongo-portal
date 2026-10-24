@@ -1,0 +1,72 @@
+# Example values for OpenShift. Every organization-specific value is a
+# placeholder: render this file with your values (for example with envsubst
+# in a pipeline) or copy it per environment.
+image:
+  repository: ${PORTAL_IMAGE_REPOSITORY}
+  digest: ${PORTAL_IMAGE_DIGEST}          # sha256:..., from the release notes
+platform: openshift
+replicaCount: 2
+
+openshift:
+  requiredSCC: mongo-portal-restricted   # created once by a cluster administrator
+  sccRoleBinding:
+    create: true
+
+route:
+  host: ${PORTAL_ROUTE_HOST}               # empty: assigned by the cluster
+
+config:
+  environment: production
+  server:
+    publicOrigin: https://${PORTAL_ROUTE_HOST}
+  identity:
+    openshift:
+      enabled: auto
+    requireSSO: true
+  session:
+    registry: true
+  store:
+    enabled: true
+    profile: primary
+    database: mongo_portal
+    usernameFile: /etc/mongo-portal/store/username
+    passwordFile: /etc/mongo-portal/store/password
+  audit:
+    persist: true
+    retention: 2160h
+  profiles:
+    - name: primary
+      displayName: ${MONGODB_PROFILE_DISPLAY_NAME}
+      uri: mongodb://${MONGODB_HOSTS}/
+      replicaSet: ${MONGODB_REPLICA_SET}
+      authMechanisms: [SCRAM-SHA-256, MONGODB-OIDC]
+      tls:
+        mode: enabled
+        caFile: /etc/mongo-portal/mongodb-ca/ca.crt
+      oidc:
+        issuer: ${MONGODB_OIDC_ISSUER_URL}
+        clientID: ${MONGODB_OIDC_CLIENT_ID}
+        audience: ${MONGODB_OIDC_AUDIENCE}
+        scopes: [openid, offline_access]
+        autoConnect: true
+
+rbacPolicy:
+  policy: |
+    g, ${PORTAL_ADMIN_GROUP}, role:admin
+    g, ${PORTAL_PLATFORM_GROUP}, role:platform-admin
+    g, ${PORTAL_DEVELOPER_GROUP}, role:mongodb
+
+networkPolicy:
+  egress:
+    mongodb:
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: ${MONGODB_NAMESPACE}
+            podSelector:
+              matchLabels:
+                ${MONGODB_POD_LABEL_KEY}: ${MONGODB_POD_LABEL_VALUE}
+        ports: [27017]
+
+serviceMonitor:
+  enabled: true

@@ -117,6 +117,18 @@ oc rollout status deploy/mongo-portal -n mongo-portal-prod
 oc get route mongo-portal -n mongo-portal-prod -o jsonpath='https://{.spec.host}{"\n"}'
 ```
 
+Helm (same resources, one values file per environment; see
+[charts/mongo-portal](../charts/mongo-portal/README.md)):
+
+```bash
+helm upgrade --install mongo-portal charts/mongo-portal -n $NS -f values-$ENV.yaml \
+  --set image.repository=$PORTAL_IMAGE_REPOSITORY --set image.digest=$PORTAL_IMAGE_DIGEST
+helm test mongo-portal -n $NS --logs      # read-only preflight inside the cluster
+```
+
+Rollout order, the pre-deployment checks and rollback are in
+[ORGANIZATION_CONFIGURATION.md](ORGANIZATION_CONFIGURATION.md#controlled-rollout-and-rollback).
+
 ## 7. Verify
 
 ```bash
@@ -125,6 +137,7 @@ oc get pods -n $NS -l app.kubernetes.io/name=mongo-portal \
 #   SCC must be mongo-portal-restricted
 oc logs deploy/mongo-portal -n $NS | grep -E '"mongo portal started"|openshift login|rbac policy loaded'
 oc exec deploy/mongo-portal -n $NS -- /usr/bin/mongo-portal healthcheck && echo healthy
+K8S_NAMESPACE=$NS scripts/preflight-openshift.sh          # read-only: deployment, Route, SCC, Secrets present, in-pod preflight
 ```
 
 Then browse to the Route:

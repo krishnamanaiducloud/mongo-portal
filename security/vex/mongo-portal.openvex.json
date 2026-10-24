@@ -1,0 +1,28 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/krishnamanaiducloud/mongo-portal/security/vex/mongo-portal.openvex.json",
+  "author": "mongo-portal maintainers",
+  "role": "Document Creator",
+  "timestamp": "2026-10-24T00:00:00Z",
+  "version": 1,
+  "tooling": "manual analysis; enforced by the CI dependency gate",
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "GO-2026-5932",
+        "description": "The golang.org/x/crypto/openpgp packages are unmaintained, unsafe by design, and have known security issues."
+      },
+      "timestamp": "2026-10-24T00:00:00Z",
+      "products": [
+        {
+          "@id": "pkg:golang/github.com/krishnamanaiducloud/mongo-portal",
+          "subcomponents": [{ "@id": "pkg:golang/golang.org/x/crypto" }]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The advisory concerns only the golang.org/x/crypto/openpgp packages. They are not compiled into the mongo-portal binary: `go list -deps ./cmd/portal` lists only x/crypto/pbkdf2, x/crypto/scrypt and x/crypto/ocsp (required by the MongoDB driver and pkcs8), and govulncheck symbol analysis reports no reachable use. CI fails the build if any openpgp package becomes a dependency of the binary. Review again by 2027-01-22 or when x/crypto changes.",
+      "action_statement": "None required while the CI dependency gate passes."
+    }
+  ]
+}

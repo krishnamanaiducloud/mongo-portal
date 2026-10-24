@@ -40,8 +40,12 @@ type operation struct {
 	PlanSummary  string  `json:"planSummary,omitempty"`
 	KillPending  bool    `json:"killPending"`
 	Slow         bool    `json:"slow"`
-	Portal       bool    `json:"portal"`
-	Internal     bool    `json:"internal"`
+	// ExpectedWait explains an operation that waits by design (awaitable
+	// hello, tailable cursors, change streams, oplog tailing); it is never
+	// reported as slow.
+	ExpectedWait string `json:"expectedWait,omitempty"`
+	Portal       bool   `json:"portal"`
+	Internal     bool   `json:"internal"`
 }
 
 var opIDRe = regexp.MustCompile(`^(-?\d{1,19}|[A-Za-z0-9_.-]{1,64}:\d{1,19})$`)
@@ -57,12 +61,12 @@ func (s *Server) currentOps(ctx context.Context, rc *reqCtx, idle bool, match bs
 			pipe = append(pipe, bson.D{{Key: "$match", Value: match}})
 		}
 		pipe = append(pipe,
-			bson.D{{Key: "$project", Value: bson.D{
+			bson.D{{Key: "$project", Value: projectWith(bson.D{
 				{Key: "opid", Value: 1}, {Key: "type", Value: 1}, {Key: "op", Value: 1}, {Key: "ns", Value: 1}, {Key: "active", Value: 1},
 				{Key: "secs_running", Value: 1}, {Key: "microsecs_running", Value: 1}, {Key: "client", Value: 1}, {Key: "appName", Value: 1},
 				{Key: "desc", Value: 1}, {Key: "connectionId", Value: 1}, {Key: "waitingForLock", Value: 1}, {Key: "planSummary", Value: 1},
 				{Key: "killPending", Value: 1}, {Key: "user", Value: bson.D{{Key: "$arrayElemAt", Value: bson.A{"$effectiveUsers.user", 0}}}},
-			}}},
+			})}},
 			bson.D{{Key: "$limit", Value: 5000}},
 		)
 		cur, err := rc.sess.Client.Database("admin").Aggregate(ctx, pipe)
@@ -92,7 +96,8 @@ func (s *Server) toOperation(d bson.M) operation {
 	}
 	o.Internal = o.Client == ""
 	o.Portal = strings.HasPrefix(o.AppName, "mongo-portal")
-	o.Slow = o.Active && o.SecsRunning >= s.Config.Monitoring.SlowOperation.Seconds()
+	o.ExpectedWait = expectedWait(d, s.Config.Monitoring.SlowOperationIgnoreApps)
+	o.Slow = o.Active && o.ExpectedWait == "" && o.SecsRunning >= s.Config.Monitoring.SlowOperation.Seconds()
 	return o
 }
 

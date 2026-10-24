@@ -388,9 +388,44 @@ func newSharedPortal(t *testing.T, pod string) *sharedPortal {
 	t.Cleanup(ss.Close)
 	alog := audit.NewWithOptions(logger, audit.Options{Capacity: 100, Pod: pod, Sink: st.Audit()})
 	srv := api.New(api.Deps{Config: cfg, Identity: res, RBAC: rb, CSRFKey: key, Store: ss, Audit: alog, Metrics: metrics.New(), Logger: logger,
-		Pod: pod, Registry: st.Sessions(), AuditChain: st.Audit().Chain,
+		Pod: pod, Registry: st.Sessions(), AuditChain: st.Audit().Chain, Invalidations: st.Invalidations(),
 		StoreStatus: func() map[string]any { return map[string]any{"state": st.Status().State} }})
 	return &sharedPortal{portal: &portal{t: t, h: srv.Handler(), store: ss}, srv: srv, log: alog}
+}
+
+// A cache invalidation requested on one replica is applied by the others
+// and every replica's result is recorded.
+func TestCacheInvalidationAcrossReplicas(t *testing.T) {
+	ctx := context.Background()
+	_ = adminClient(t).Database("mongo_portal").Collection("cache_invalidations").Drop(ctx)
+	since := time.Now().UTC().Add(-time.Minute)
+	a, b := newSharedPortal(t, "portal-a"), newSharedPortal(t, "portal-b")
+	admin := &client{p: a.portal, user: "pat", groups: "platform"}
+	_, me := admin.do("GET", "/api/v1/me", nil)
+	admin.csrf = me["csrfToken"].(string)
+	code, m := admin.do("POST", "/api/v1/admin/caches/invalidate", map[string]any{"caches": []string{"rbac-policy", "identities"}, "scope": "all", "confirm": "invalidate"})
+	if code != 200 || m["id"] == nil {
+		t.Fatalf("invalidate on a: %d %v", code, m)
+	}
+	if n := b.srv.SyncCaches(ctx, since); n != 1 {
+		t.Fatalf("b applied %d invalidations", n)
+	}
+	if n := b.srv.SyncCaches(ctx, since); n != 0 {
+		t.Fatalf("an invalidation must be applied once, got %d", n)
+	}
+	if n := a.srv.SyncCaches(ctx, since); n != 0 {
+		t.Fatalf("the origin must not apply its own invalidation again, got %d", n)
+	}
+	viewer := &client{p: b.portal, user: "pat", groups: "platform"}
+	_, m = viewer.do("GET", "/api/v1/admin/caches", nil)
+	recent, _ := m["recent"].([]any)
+	if len(recent) != 1 {
+		t.Fatalf("recent invalidations on b: %v", m)
+	}
+	applied := recent[0].(map[string]any)["applied"].([]any)
+	if len(applied) != 2 {
+		t.Fatalf("both replicas must have applied it: %v", applied)
+	}
 }
 
 // Two replicas share the audit trail and the session registry: an

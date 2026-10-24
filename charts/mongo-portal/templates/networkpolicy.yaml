@@ -1,0 +1,75 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mongo-portal.fullname" . }}-ingress
+  labels:
+    {{- include "mongo-portal.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mongo-portal.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        {{- toYaml $np.ingress.from | nindent 8 }}
+      ports:
+        - port: 8443
+          protocol: TCP
+    {{- with $np.ingress.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: 9090
+          protocol: TCP
+    {{- end }}
+---
+# Egress: DNS, the MongoDB deployments, HTTPS to the API server and the
+# identity providers, and anything listed in networkPolicy.egress.extra.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mongo-portal.fullname" . }}-egress
+  labels:
+    {{- include "mongo-portal.labels" . | nindent 4 }}
+spec:
+  # The portal and its preflight test pod have the same egress.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [{{ include "mongo-portal.name" . }}, {{ include "mongo-portal.name" . }}-preflight]
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        {{- toYaml $np.egress.dns | nindent 8 }}
+      ports:
+        {{- range $np.egress.dnsPorts }}
+        - port: {{ . }}
+          protocol: UDP
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- range $np.egress.mongodb }}
+    - to:
+        {{- toYaml .to | nindent 8 }}
+      ports:
+        {{- range (default (list 27017) .ports) }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with $np.egress.httpsPorts }}
+    - ports:
+        {{- range . }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with $np.egress.extra }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

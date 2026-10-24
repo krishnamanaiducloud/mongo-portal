@@ -54,9 +54,16 @@ type IdP struct {
 	mu            sync.Mutex
 	codes         map[string]grant
 	refresh       map[string]User
-	// Issued counts access tokens issued (initial and refreshed).
-	Issued, Refreshed int
+	// sessions are browser sessions at the provider (cookie testidp_session):
+	// an interactive sign-in creates one; prompt=none needs one.
+	sessions map[string]User
+	// Issued counts access tokens issued (initial and refreshed);
+	// Interactive counts sign-ins that would have shown a login page.
+	Issued, Refreshed, Interactive int
 }
+
+// SessionCookie is the provider's browser session cookie.
+const SessionCookie = "testidp_session"
 
 type grant struct {
 	user                       User
@@ -70,7 +77,7 @@ func New(issuer, clientID string) *IdP {
 	k, _ := rsa.GenerateKey(rand.Reader, 2048)
 	o, _ := rsa.GenerateKey(rand.Reader, 2048)
 	return &IdP{Issuer: issuer, ClientID: clientID, AccessAudience: clientID, TokenTTL: 5 * time.Minute, key: k, otherKey: o,
-		codes: map[string]grant{}, refresh: map[string]User{},
+		codes: map[string]grant{}, refresh: map[string]User{}, sessions: map[string]User{},
 		User: User{Subject: "u-1001", Name: "alice", Email: "alice@example.com", Groups: []string{"devs"}}}
 }
 
@@ -111,16 +118,43 @@ func (p *IdP) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown client", http.StatusBadRequest)
 		return
 	}
-	code := randString()
+	rq := redirect.Query()
+	rq.Set("state", q.Get("state"))
 	p.mu.Lock()
-	p.codes[code] = grant{user: p.User, challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), redirect: redirect.String(),
+	user, signedIn := User{}, false
+	if c, err := r.Cookie(SessionCookie); err == nil {
+		user, signedIn = p.sessions[c.Value]
+	}
+	switch {
+	case q.Get("prompt") == "none" && !signedIn:
+		// OpenID Connect Core 3.1.2.6: no session, and no interaction allowed.
+		p.mu.Unlock()
+		rq.Set("error", "login_required")
+		redirect.RawQuery = rq.Encode()
+		http.Redirect(w, r, redirect.String(), http.StatusFound)
+		return
+	case q.Get("prompt") != "none":
+		// The sign-in form would be shown here; the configured user signs in.
+		user = p.User
+		p.Interactive++
+		sid := randString()
+		p.sessions[sid] = user
+		http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: sid, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode})
+	}
+	code := randString()
+	p.codes[code] = grant{user: user, challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), redirect: redirect.String(),
 		clientID: q.Get("client_id"), scope: q.Get("scope"), expires: time.Now().Add(time.Minute)}
 	p.mu.Unlock()
-	rq := redirect.Query()
 	rq.Set("code", code)
-	rq.Set("state", q.Get("state"))
 	redirect.RawQuery = rq.Encode()
 	http.Redirect(w, r, redirect.String(), http.StatusFound)
+}
+
+// EndSessions signs every browser out at the provider.
+func (p *IdP) EndSessions() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sessions = map[string]User{}
 }
 
 func (p *IdP) token(w http.ResponseWriter, r *http.Request) {

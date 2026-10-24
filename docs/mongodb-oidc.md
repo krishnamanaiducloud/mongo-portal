@@ -34,9 +34,53 @@ Tokens live only in the memory of the portal replica that holds the session.
 They are never written to cookies, logs, the audit trail or the shared store.
 
 The portal's own sign-in (OpenShift or another OIDC provider) is **not**
-reused for MongoDB. When both use the same corporate IdP and the user already
-has an IdP session, the second redirect completes without a prompt, so the
-user sees one sign-in.
+reused for MongoDB: an OpenShift OAuth token is opaque and is not a token
+MongoDB can validate, and a portal sign-in token is issued for the portal,
+not for MongoDB. MongoDB always receives a token issued for it by the
+provider it trusts.
+
+## Connecting without a second sign-in (after OpenShift or OIDC sign-in)
+
+The two layers stay separate, but the user does not have to act twice:
+
+```
+browser ──1──▶ OpenShift OAuth ──federated──▶ corporate IdP   (portal sign-in; IdP session cookie in the browser)
+browser ──2──▶ portal: profile has oidc.autoConnect
+portal  ──3──▶ corporate IdP /authorize?…&prompt=none          (no page shown: the IdP answers from its session)
+IdP     ──4──▶ portal callback with a code ──▶ token for MongoDB (aud = MongoDB's audience)
+portal  ──5──▶ MongoDB: MONGODB-OIDC with the user's own token ──▶ MongoDB maps it to $external roles
+```
+
+With `oidc.autoConnect: true` on the profile, a user who signed in to the
+portal with single sign-on is connected to MongoDB automatically: the login
+page shows "Connecting to …" (with a way to choose another method) and the
+portal sends a standard silent authorization request (OpenID Connect Core,
+`prompt=none`). When the browser already has a session at that provider —
+because OpenShift's OAuth server federates to it, or because the portal
+sign-in uses it — the provider answers without any page, so no password and
+no second prompt appear. The same happens when a session ended (for example
+after a portal restart): the user is reconnected silently.
+
+If the provider needs the user (`login_required`, `interaction_required`,
+`consent_required`), the portal continues with the provider's normal sign-in
+page; with `interactiveFallback: false` it shows why instead. It never falls
+back to a password, and a failed attempt is not retried automatically within
+two minutes.
+
+This works only when all of the following hold; the preflight
+(`mongo-portal preflight`) checks the parts it can see:
+
+| Condition | Who | How to check |
+| --- | --- | --- |
+| OpenShift OAuth (or the portal's OIDC sign-in) federates to the **same** IdP that MongoDB trusts | OpenShift / IdP administrators | `oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].openID.issuer}'` equals MongoDB's issuer |
+| MongoDB trusts that issuer and the profile's client id | MongoDB administrator | preflight check *MONGODB-OIDC server* |
+| The client allows `prompt=none` and the portal's redirect URI; consent is pre-granted | IdP administrator | a silent request does not return `consent_required` |
+| Access tokens are JWTs with MongoDB's audience and the issuer MongoDB trusts | IdP administrator | `token_*` errors below; set `oidc.audience` for a precise check |
+| The user has a `$external` user or group role in MongoDB | MongoDB administrator | otherwise "MongoDB rejected your OIDC identity" |
+
+Token exchange (RFC 8693) is not used: OpenShift OAuth tokens cannot be
+exchanged at a corporate IdP, and a silent authorization request gives the
+same experience with any standards-compliant provider.
 
 ## Requirements
 
@@ -149,6 +193,9 @@ profiles:
       issuer: https://login.example.com/        # = issuerURI / oidcIdentityProviders[].issuer
       clientID: mongodb-human-flows             # = clientId
       scopes: [openid, offline_access]          # plus an audience scope if the IdP needs one
+      audience: mongodb-prod                    # = audience: precise error for tokens issued for something else
+      autoConnect: true                         # connect SSO users without a second sign-in (above)
+      # authParams: {audience: mongodb-prod}    # providers that select the audience by parameter
       # clientSecretFile: /etc/mongo-portal/oidc/mongodb-client-secret
       # caFile: /etc/mongo-portal/oidc/idp-ca.crt
       # allowedHosts: [db-0.db-svc.mongodb.svc]  # default: the URI hosts
@@ -167,8 +214,17 @@ and hides the password form for profiles that offer only MONGODB-OIDC.
 | MONGODB-OIDC is not enabled on the server | `authenticationMechanisms` lacks MONGODB-OIDC | Server configuration |
 | The identity provider of this deployment is not reachable | Portal cannot reach discovery or token endpoints | Egress, DNS, CA |
 | Your OIDC sign-in for MongoDB has expired | No refresh token, or it was revoked | Connect again; request `offline_access` |
+| An access token MongoDB cannot use (not a JWT) | The provider issues opaque (reference) access tokens for this client | Configure JWT access tokens for the MongoDB client |
+| Issued by a different issuer than MongoDB trusts | Typically Microsoft Entra ID v1 tokens (`sts.windows.net`) while MongoDB trusts the v2 issuer | Set `accessTokenAcceptedVersion: 2` in the app manifest |
+| Issued for a different audience | `aud` differs from `oidc.audience` | Request the MongoDB API scope or set `authParams` |
+| The automatic connection needs you to sign in | Silent request answered with `login_required` and `interactiveFallback: false` | Sign in at the provider (button), or enable the fallback |
 
-Every attempt is audited as `mongodb_login` with method `mongodb-oidc`.
+The token checks read the token's claims only to explain a refusal; MongoDB
+still validates every token. Every attempt is audited as `mongodb_login` with
+method `mongodb-oidc` and the reason. **Diagnose connection** on the login
+page (and `mongo-portal preflight`) shows which issuer and client id the
+server announces — read from the first step of the MONGODB-OIDC conversation,
+without sending a token.
 
 ## Migration plan
 
@@ -205,4 +261,15 @@ a test IdP, then runs the full browser flow through the portal: successful
 connection as `testidp/<sub>`, MongoDB-enforced read-only privileges, token
 expiry with refresh, an unknown identity refused by MongoDB, a client id
 mismatch refused before the token is sent, and SCRAM on the same server.
-MongoDB Enterprise is used there for development testing only.
+`TestSeamlessMongoDBOIDCAfterSSO` covers the path above: a corporate sign-in
+on behalf of another client (as OpenShift's OAuth server does) leaves an IdP
+session; the portal then connects to MongoDB with `prompt=none`, and the test
+asserts that the IdP showed no further sign-in, that MongoDB authenticated
+the user's own identity and enforces its privileges, and that without an IdP
+session the portal continues interactively. `TestPreflightReadsServerIdP`
+checks that the preflight reads the server's provider without obtaining a
+token. MongoDB Enterprise is used there for development testing only.
+
+Not tested here: a real OpenShift OAuth server federated to a real Entra ID,
+Okta or Keycloak tenant. That needs the organization's configuration and is
+part of the acceptance test in [ORGANIZATION_CONFIGURATION.md](ORGANIZATION_CONFIGURATION.md).

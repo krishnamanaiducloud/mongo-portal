@@ -84,7 +84,7 @@ describe('command palette ranking', () => {
 function me(over: Partial<Me> = {}): Me {
   return {
     authenticated: false, user: '', source: '', sso: false, groups: [], roles: [], permissions: {},
-    csrfToken: 't', hasSession: false, ssoLogoutURL: '', environment: 'test', build: { version: 'v', commit: 'abcdef0' },
+    csrfToken: 't', hasSession: false, ssoLogoutURL: '', environment: 'test',
     auth: { openshift: { state: 'disabled' }, openshiftURL: '/oauth/start', header: false, dev: false, requireSSO: false, mongodbLogin: true },
     ...over,
   };

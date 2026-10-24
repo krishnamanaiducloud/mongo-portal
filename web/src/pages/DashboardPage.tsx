@@ -243,12 +243,6 @@ export function DashboardPage({ me }: { me: Me }) {
                   <DescriptionListTerm>Tracing</DescriptionListTerm>
                   <DescriptionListDescription>{status.data?.tracing ? 'On' : 'Off'}</DescriptionListDescription>
                 </DescriptionListGroup>
-                <DescriptionListGroup>
-                  <DescriptionListTerm>Version</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    {me.build.version} ({me.build.commit.slice(0, 7)})
-                  </DescriptionListDescription>
-                </DescriptionListGroup>
               </DescriptionList>
             </CardBody>
             <CardFooter>

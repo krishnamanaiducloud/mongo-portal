@@ -44,6 +44,7 @@ g, <subject>, <role>
 | `audit` | `get` | `self` or `all` |
 | `sessions` | `get`, `delete` | `self` or `all` |
 | `settings` | `get` | `*` |
+| `cache` | `get` (view the portal caches), `delete` (invalidate them) | `*` |
 
 Exports also need `documents get`, imports `documents create` (and
 `documents update` for upserts) on the same namespace.
@@ -60,7 +61,7 @@ Creating a database means creating its first collection (`collections:create`).
 | `role:dbadmin` | editor, plus dropping collections and databases, administrative shell commands and killOp |
 | `role:monitoring` | Monitoring and running operations only, no data |
 | `role:auditor` | monitoring, plus every user's audit events and the session inventory, no data |
-| `role:platform-admin` | auditor, plus revoking sessions and the settings page; **no data access** |
+| `role:platform-admin` | auditor, plus revoking sessions, the settings page and the portal caches; **no data access** |
 | `role:admin` | Everything (break-glass): data, portal administration and every audit event |
 
 Portal administration and database administration are separate:

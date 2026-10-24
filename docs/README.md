@@ -4,14 +4,19 @@ A web portal for MongoDB on OpenShift where every database operation runs as
 the signed-in user's **own MongoDB account**.
 
 The Go backend is in [`cmd/`](../cmd/) and [`internal/`](../internal/), the
-React UI in [`web/`](../web/), and the OpenShift manifests in
-[`examples/`](../examples/): plain files in `examples/openshift`, Kustomize
-overlays in `examples/kustomize`, Argo CD applications in `examples/argocd`.
+React UI in [`web/`](../web/), the Helm chart in
+[`charts/mongo-portal`](../charts/mongo-portal/) (OpenShift and Kubernetes), and
+the manifests in [`examples/`](../examples/): plain files in
+`examples/openshift`, Kustomize overlays in `examples/kustomize`, Argo CD
+applications in `examples/argocd`.
 
 | Document | Contents |
 | --- | --- |
+| [ORGANIZATION_CONFIGURATION.md](ORGANIZATION_CONFIGURATION.md) | What each organization configures, who provides it, setup procedures, acceptance test, rollout and rollback |
 | [architecture.md](architecture.md) | Components, request flow, authentication and authorization model |
 | [configuration.md](configuration.md) | Every configuration key, TLS and non-TLS profiles |
+| [preflight.md](preflight.md) | Read-only checks of an environment: CLI, UI diagnostics, OpenShift script |
+| [cache.md](cache.md) | The portal's caches, invalidation across replicas, personal refresh and reconnect |
 | [deployment.md](deployment.md) | Step-by-step OpenShift deployment, discovery commands |
 | [oauth.md](oauth.md) | Built-in OpenShift login, passive behaviour, troubleshooting |
 | [oidc.md](oidc.md) | OpenID Connect sign-in (Entra ID, Okta, Keycloak, SAML/LDAP brokers) |

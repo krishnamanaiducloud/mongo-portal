@@ -84,7 +84,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, rc *reqC
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"environment": c.Environment, "production": c.IsProduction(), "build": s.Build, "pod": s.Pod,
+		"environment": c.Environment, "production": c.IsProduction(), "pod": s.Pod,
 		"identity": map[string]any{
 			"requireSSO": c.Identity.RequireSSO,
 			"openshift":  map[string]any{"enabled": c.Identity.OpenShift.Enabled, "status": s.Identity.OpenShift.Status(), "scopes": c.Identity.OpenShift.Scopes},

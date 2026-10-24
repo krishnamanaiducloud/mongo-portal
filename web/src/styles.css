@@ -88,12 +88,6 @@
   color: #00ed64;
 }
 
-.portal-login-version {
-  font-family: var(--pf-t--global--font--family--mono);
-  font-size: 0.8rem;
-  color: rgb(255 255 255 / 55%);
-}
-
 .portal-login-main {
   display: flex;
   align-items: center;
@@ -141,8 +135,7 @@
     padding: 1.5rem 1rem;
   }
 
-  .portal-login-points,
-  .portal-login-version {
+  .portal-login-points {
     display: none;
   }
 }
@@ -1029,4 +1022,346 @@ kbd {
 
 .portal-capitalize {
   text-transform: capitalize;
+}
+
+/* ---- Design layer: type, surfaces, navigation ---------------------------
+   Applies to every page through PatternFly's own component variables, so
+   both themes and all components stay consistent. */
+:root {
+  --portal-radius: 14px;
+  --portal-radius-sm: 10px;
+  --portal-shadow: 0 1px 2px rgb(15 23 42 / 5%), 0 6px 18px rgb(15 23 42 / 6%);
+  --portal-shadow-hover: 0 2px 6px rgb(15 23 42 / 8%), 0 14px 32px rgb(15 23 42 / 10%);
+  --portal-accent: #00a35c;
+  --portal-accent-2: #1c6ee8;
+  --portal-gradient: linear-gradient(135deg, var(--portal-accent) 0%, var(--portal-accent-2) 100%);
+  --pf-t--global--font--family--body: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --pf-t--global--font--family--heading: var(--pf-t--global--font--family--body);
+}
+
+.pf-v6-theme-dark {
+  --portal-shadow: 0 1px 2px rgb(0 0 0 / 35%), 0 8px 22px rgb(0 0 0 / 30%);
+  --portal-shadow-hover: 0 2px 6px rgb(0 0 0 / 40%), 0 16px 36px rgb(0 0 0 / 40%);
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+.pf-v6-c-title {
+  letter-spacing: -0.01em;
+}
+
+.pf-v6-c-card {
+  --pf-v6-c-card--BorderRadius: var(--portal-radius);
+  box-shadow: var(--portal-shadow);
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.pf-v6-c-card.pf-m-plain {
+  box-shadow: none;
+}
+
+.pf-v6-c-card.pf-m-selectable:hover,
+.pf-v6-c-card.pf-m-clickable:hover {
+  box-shadow: var(--portal-shadow-hover);
+  transform: translateY(-1px);
+}
+
+.pf-v6-c-label {
+  font-weight: 500;
+}
+
+.pf-v6-c-nav__link {
+  --pf-v6-c-nav__link--BorderRadius: var(--portal-radius-sm);
+  transition: background-color 0.12s ease;
+}
+
+.pf-v6-c-nav__section-title {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.72rem;
+}
+
+.pf-v6-c-table thead th {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.pf-v6-c-table tbody tr:hover > td {
+  background: var(--pf-t--global--background--color--secondary--hover, rgb(127 127 127 / 5%));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-v6-c-card,
+  .pf-v6-c-nav__link {
+    transition: none;
+  }
+
+  .pf-v6-c-card.pf-m-selectable:hover,
+  .pf-v6-c-card.pf-m-clickable:hover {
+    transform: none;
+  }
+}
+
+/* Brand mark */
+.portal-logo-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 9px;
+  background: var(--portal-gradient);
+  color: #fff;
+  box-shadow: 0 4px 12px rgb(0 163 92 / 30%);
+}
+
+.portal-logo-mark svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.portal-logo-mark-lg {
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 15px;
+  margin-bottom: 1.25rem;
+}
+
+.portal-logo-mark-lg svg {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+/* Page header */
+.portal-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.portal-page-header-text {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+}
+
+.portal-page-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: none;
+  border-radius: 12px;
+  color: var(--portal-accent-2);
+  background: color-mix(in srgb, var(--portal-accent-2) 12%, transparent);
+}
+
+.portal-page-desc {
+  margin-top: 0.25rem;
+  max-width: 70ch;
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.portal-page-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.portal-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Sign-in */
+.portal-login-hero .portal-login-title.pf-v6-c-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.portal-login-hero p.portal-login-tagline {
+  color: rgb(255 255 255 / 82%);
+  font-size: 1.125rem;
+  margin-bottom: 0.5rem;
+}
+
+.portal-env-pill {
+  display: inline-block;
+  margin-bottom: 1rem;
+  padding: 0.15rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgb(255 255 255 / 35%);
+  color: rgb(255 255 255 / 90%);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.portal-login-points strong {
+  color: #fff;
+}
+
+.portal-login-card {
+  border-radius: 20px;
+  --pf-v6-c-card--BorderRadius: 20px;
+  box-shadow: 0 2px 6px rgb(15 23 42 / 6%), 0 24px 60px rgb(15 23 42 / 12%);
+}
+
+.portal-steps {
+  display: flex;
+  gap: 1.5rem;
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.portal-steps li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.portal-step-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 1px solid var(--pf-t--global--border--color--default);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.portal-steps li.is-current {
+  color: var(--pf-t--global--text--color--regular);
+  font-weight: 600;
+}
+
+.portal-steps li.is-current .portal-step-dot {
+  border-color: transparent;
+  background: var(--portal-gradient);
+  color: #fff;
+}
+
+.portal-steps li.is-done .portal-step-dot {
+  border-color: transparent;
+  color: var(--pf-t--global--icon--color--status--success--default);
+}
+
+.portal-autoconnect {
+  display: flex;
+  gap: 1.25rem;
+  align-items: center;
+  padding: 1.5rem;
+  border-radius: var(--portal-radius);
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.portal-callout {
+  display: block;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  border-radius: var(--portal-radius-sm);
+  border-inline-start: 3px solid var(--portal-accent-2);
+  background: color-mix(in srgb, var(--portal-accent-2) 7%, transparent);
+}
+
+/* Diagnostics */
+.portal-diag-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0.5rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.portal-diag-list li {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(8rem, 14rem) 1fr;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: var(--pf-t--global--background--color--secondary--default);
+  font-size: 0.875rem;
+}
+
+.portal-diag-check {
+  font-weight: 600;
+}
+
+.portal-diag-target {
+  display: block;
+  font-weight: 400;
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: 0.75rem;
+  color: var(--pf-t--global--text--color--subtle);
+  overflow-wrap: anywhere;
+}
+
+.portal-diag-detail {
+  overflow-wrap: anywhere;
+}
+
+.portal-diag-card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: var(--portal-radius-sm);
+  border: 1px solid var(--pf-t--global--border--color--subtle, var(--pf-t--global--border--color--default));
+}
+
+@media (max-width: 640px) {
+  .portal-diag-list li {
+    grid-template-columns: 1.25rem 1fr;
+  }
+
+  .portal-diag-detail {
+    grid-column: 2;
+  }
+}
+
+/* Refresh & connection */
+.portal-action-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.portal-action {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr auto;
+  gap: 0.9rem;
+  align-items: center;
+  padding: 0.9rem 1rem;
+  border-radius: var(--portal-radius-sm);
+  border: 1px solid var(--pf-t--global--border--color--subtle, var(--pf-t--global--border--color--default));
+}
+
+.portal-action > svg {
+  color: var(--portal-accent-2);
+}
+
+.portal-nav-icon {
+  display: inline-flex;
+  width: 1rem;
+  margin-inline-end: 0.65rem;
+  color: var(--pf-t--global--icon--color--subtle);
+}
+
+.pf-v6-c-nav__link.pf-m-current .portal-nav-icon,
+.pf-v6-c-nav__link.active .portal-nav-icon {
+  color: var(--portal-accent-2);
 }

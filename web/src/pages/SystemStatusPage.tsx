@@ -17,6 +17,7 @@ import {
 import { CheckCircleIcon, MinusCircleIcon, OpenshiftIcon } from '@patternfly/react-icons';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { useStatus } from '../api/hooks';
+import { DiagnosticsPanel } from '../components/Diagnostics';
 import { HealthLabel, OpenShiftStateLabel } from '../components/Indicators';
 import { ErrorState } from './StatusPages';
 
@@ -191,12 +192,6 @@ export function SystemStatusPage() {
                     </DescriptionListDescription>
                   </DescriptionListGroup>
                 )}
-                <DescriptionListGroup>
-                  <DescriptionListTerm>Version</DescriptionListTerm>
-                  <DescriptionListDescription className="portal-mono">
-                    {s.build.version} ({s.build.commit.slice(0, 12)})
-                  </DescriptionListDescription>
-                </DescriptionListGroup>
               </DescriptionList>
             </CardBody>
           </Card>
@@ -229,6 +224,25 @@ export function SystemStatusPage() {
                   ))}
                 </Tbody>
               </Table>
+            </CardBody>
+          </Card>
+        </GridItem>
+        <GridItem span={12}>
+          <Card>
+            <CardTitle>
+              Connection diagnostics <span className="portal-card-sub">· read-only checks; nothing is changed and no credentials are sent</span>
+            </CardTitle>
+            <CardBody>
+              <Grid hasGutter>
+                {s.profiles.map((p) => (
+                  <GridItem key={p.name} md={6}>
+                    <div className="portal-diag-card">
+                      <strong>{p.displayName}</strong>
+                      <DiagnosticsPanel profile={p.name} label="Run diagnostics" />
+                    </div>
+                  </GridItem>
+                ))}
+              </Grid>
             </CardBody>
           </Card>
         </GridItem>

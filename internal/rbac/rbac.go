@@ -55,6 +55,9 @@ const (
 	Sessions Resource = "sessions"
 	// Settings is the effective portal configuration view (object: "*").
 	Settings Resource = "settings"
+	// Cache is the portal's own caches (object: "*"): get shows them,
+	// delete invalidates them. It never touches MongoDB data or caches.
+	Cache Resource = "cache"
 )
 
 const (
@@ -82,6 +85,7 @@ var Actions = map[Resource][]Action{
 	Operations:  {Get, Kill},
 	Sessions:    {Get, Delete},
 	Settings:    {Get},
+	Cache:       {Get, Delete},
 }
 
 // Built-in role names.
@@ -158,6 +162,8 @@ p, role:auditor, sessions, get, all, allow
 g, role:platform-admin, role:auditor
 p, role:platform-admin, sessions, delete, all, allow
 p, role:platform-admin, settings, get, *, allow
+p, role:platform-admin, cache, get, *, allow
+p, role:platform-admin, cache, delete, *, allow
 
 g, role:dbadmin, role:editor
 p, role:dbadmin, databases, *, *, allow

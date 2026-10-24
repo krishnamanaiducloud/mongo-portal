@@ -43,7 +43,6 @@ export interface Me {
   hasSession: boolean;
   ssoLogoutURL: string;
   environment: string;
-  build: { version: string; commit: string };
   auth: AuthOptions;
 }
 
@@ -69,7 +68,50 @@ export interface Profile {
   replicaSet?: string;
   health?: ProfileHealth;
   /** MONGODB-OIDC sign-in, when the profile offers it. */
-  oidc?: { displayName: string; issuer: string; url: string };
+  oidc?: { displayName: string; issuer: string; url: string; autoConnect?: boolean };
+}
+
+export type CheckStatus = 'pass' | 'warn' | 'fail' | 'skip';
+
+/** Read-only connection diagnostics of a profile. */
+export interface DiagnosticsReport {
+  results: { area: string; check: string; target?: string; status: CheckStatus; detail?: string }[];
+  summary: Record<CheckStatus, number>;
+  duration: string;
+}
+
+export interface CacheEntry {
+  name: string;
+  title: string;
+  description: string;
+  entries: number;
+  refreshedAt?: string;
+  lastError?: string;
+}
+
+export interface CacheInvalidation {
+  id: string;
+  caches: string[];
+  requestedBy: string;
+  origin: string;
+  at: string;
+  applied: { pod: string; at: string; errors?: string[] }[];
+}
+
+export interface CachesInfo {
+  pod: string;
+  shared: boolean;
+  canInvalidate: boolean;
+  caches: CacheEntry[];
+  recent?: CacheInvalidation[];
+  recentError?: string;
+}
+
+export interface InvalidateResult {
+  results: { name: string; ok: boolean; error?: string }[];
+  scope: 'all' | 'replica';
+  note?: string;
+  id?: string;
 }
 
 export interface RoleRef {
@@ -258,7 +300,6 @@ export interface PermissionsInfo {
 export interface StatusInfo {
   auth: AuthOptions;
   profiles: { name: string; displayName: string; health: ProfileHealth }[];
-  build: { version: string; commit: string };
   rbac?: PolicyStatus;
   tracing?: boolean;
   tracingDetail?: { enabled: boolean; protocol?: string; endpoint?: string; tls: boolean; sampleRatio: number; source?: string; reason?: string };
@@ -370,6 +411,8 @@ export interface MonOperation {
   user: string;
   waitingForLock: boolean;
   planSummary?: string;
+  /** Why this operation waits by design (never counted as slow). */
+  expectedWait?: string;
 }
 
 export interface MonConnections {
@@ -381,6 +424,7 @@ export interface MonConnections {
   byClient: MonClientGroup[];
   operations: MonOperation[];
   slowOperations?: number;
+  expectedWaits?: number;
 }
 
 export interface MonitoringInfo {
@@ -466,6 +510,8 @@ export interface Operation {
   planSummary?: string;
   killPending: boolean;
   slow: boolean;
+  /** Why this operation waits by design (never reported as slow). */
+  expectedWait?: string;
   portal: boolean;
   internal: boolean;
 }

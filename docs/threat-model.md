@@ -47,7 +47,7 @@ Browser ↔ OpenShift OAuth server (user sign-in at the IdP).
 | **DoS**: brute force | Per-SSO-user (or per-client-address) rate limit, per-account lockout with backoff (only on server-confirmed failures), concurrent login cap | `TestLoginFailureAndLockout`, `limiter_test` |
 | Resource exhaustion | Body limits, query limits/skip cap, server-side `maxTimeMS`, response byte cap, session caps, pool size per session, container limits | `TestQueryLimitsAndTimeouts`, `TestSecurityHeadersAndBodyLimit` |
 | **Elevation**: container escape | Non-root arbitrary UID, read-only rootfs, all capabilities dropped, no privilege escalation, RuntimeDefault seccomp, restricted-v2 SCC, no shell/package manager in production image | smoke test, manifest checks |
-| Lateral movement | NetworkPolicies: ingress only router + monitoring; egress DNS, MongoDB pods, API/OAuth (443/6443); ServiceAccount without permissions | manifest review (cluster test pending) |
+| Lateral movement | NetworkPolicies: ingress only router + monitoring; egress DNS, MongoDB pods, API/OAuth (443/6443); ServiceAccount without permissions | `test/kind/run.sh` (enforced on Kubernetes with kindnet: an unlisted namespace is blocked); OpenShift SDN/OVN not tested |
 | Supply chain | Base images pinned by digest (Chainguard), lockfiles, `go mod verify`, `npm ci --ignore-scripts`, mongosh checksum-pinned, SBOMs, vulnerability scans, Dependabot | security scan reports |
 | OIDC token forgery or substitution (portal sign-in) | ID token signature checked against JWKS, exact issuer, audience = client id, `azp` with several audiences, expiry, nonce bound to the sign-in, PKCE, single-use state | `oidc_test` (audience, expired, nonce, wrong key, issuer mismatch, forged state) |
 | MONGODB-OIDC token sent to the wrong server | The driver's IdP info from the server must match the profile's issuer and client id before a token is released; `ALLOWED_HOSTS` restricts hosts; TLS required in production | `TestMongoDBOIDCProviderMismatch`, `test/oidc TestMongoDBOIDCRefusals` |
@@ -57,6 +57,10 @@ Browser ↔ OpenShift OAuth server (user sign-in at the IdP).
 | Ending other users' work (killOp) | `operations kill` RBAC, MongoDB `killop` privilege, typed confirmation, only running client operations, audited | `TestOperationsAndKill` |
 | Audit tampering or loss | Per-replica hash chain with sequence numbers and verification; log stream always written; store failures counted and shown | `TestAuditSearchExportAndScope`, `TestSharedStoreAuditAndRegistry` |
 | Session revocation bypass | Revocation in the shared registry closes the session on its replica at the next sync | `TestSharedStoreAuditAndRegistry` |
+| Silent MONGODB-OIDC connection abused (login CSRF, token for another audience) | `prompt=none` only after the user's own single sign-on; the same state, nonce and PKCE as interactive flows; ID token verified; the access token's issuer and audience must match before MongoDB sees it; one automatic attempt per two minutes, never after a failure or sign-out; never a fallback to a password | `TestMongoDBOIDCSilentConnect`, `TestMongoDBOIDCTokenChecks`, `test/oidc TestSeamlessMongoDBOIDCAfterSSO`, `enterprise.test.tsx` |
+| Reconnaissance through connection diagnostics | Identity and `monitoring get` on the profile required; two concurrent runs per replica; read-only, no credentials sent; audited | `TestPreflightAgainstDeployments` |
+| Cache invalidation used to disrupt | `cache delete` (platform-admin, admin) and typed confirmation; refreshes only portal caches, never data or MongoDB; audited with scope and errors | `TestCacheManagement`, `TestCacheInvalidationAcrossReplicas` |
+| Configuration placeholders inject settings | Values are substituted after parsing (a value cannot add YAML keys); unset variables fail startup by name | `TestPlaceholdersMissingAndInjection` |
 
 ## Residual risks
 

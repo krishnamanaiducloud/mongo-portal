@@ -272,6 +272,33 @@ func TestResolverSSOCookieLifecycle(t *testing.T) {
 	}
 }
 
+// An administrator's identity cache invalidation makes current sign-ins
+// pick up group changes on their next request instead of after the
+// revalidation interval.
+func TestRevalidateIdentities(t *testing.T) {
+	f := newFakeOpenShift(t)
+	r := newTestResolver(t, f, nil)
+	clock := time.Now()
+	r.now = func() time.Time { return clock }
+	w := httptest.NewRecorder()
+	r.SignIn(w, "alice", []string{"sres"}, "tok-alice", time.Hour)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookieFrom(t, w))
+
+	f.groups["alice"] = []string{"devs"}
+	clock = clock.Add(time.Minute)
+	if p := r.Resolve(httptest.NewRecorder(), req); p.Groups[0] != "sres" {
+		t.Fatalf("within the interval the cookie groups apply: %v", p.Groups)
+	}
+	r.RevalidateIdentities()
+	if p := r.Resolve(httptest.NewRecorder(), req); p == nil || len(p.Groups) != 1 || p.Groups[0] != "devs" {
+		t.Fatalf("after invalidation: %+v", p)
+	}
+	if n, at := r.ReviewCacheStats(); n != 1 || at.IsZero() {
+		t.Fatalf("stats: %d %v", n, at)
+	}
+}
+
 func TestResolverRevokedToken(t *testing.T) {
 	f := newFakeOpenShift(t)
 	r := newTestResolver(t, f, nil)

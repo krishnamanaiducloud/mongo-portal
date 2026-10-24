@@ -440,12 +440,12 @@ func (s *Server) monDatabases(ctx context.Context, rc *reqCtx) (any, error) {
 func (s *Server) monConnections(ctx context.Context, rc *reqCtx) (any, error) {
 	pipe := bson.A{
 		bson.D{{Key: "$currentOp", Value: bson.D{{Key: "allUsers", Value: true}, {Key: "idleConnections", Value: true}, {Key: "idleSessions", Value: false}}}},
-		bson.D{{Key: "$project", Value: bson.D{
+		bson.D{{Key: "$project", Value: projectWith(bson.D{
 			{Key: "active", Value: 1}, {Key: "type", Value: 1}, {Key: "op", Value: 1}, {Key: "ns", Value: 1},
 			{Key: "secs_running", Value: 1}, {Key: "client", Value: 1}, {Key: "appName", Value: 1}, {Key: "desc", Value: 1},
 			{Key: "opid", Value: 1}, {Key: "waitingForLock", Value: 1}, {Key: "planSummary", Value: 1},
 			{Key: "user", Value: bson.D{{Key: "$arrayElemAt", Value: bson.A{"$effectiveUsers.user", 0}}}},
-		}}},
+		})}},
 	}
 	cur, err := rc.sess.Client.Database("admin").Aggregate(ctx, pipe)
 	if err != nil {
@@ -470,6 +470,8 @@ func (s *Server) monConnections(ctx context.Context, rc *reqCtx) (any, error) {
 		User       string  `json:"user"`
 		WaitingFor bool    `json:"waitingForLock"`
 		Plan       string  `json:"planSummary,omitempty"`
+		// Expected explains a wait by design (never counted as slow).
+		Expected string `json:"expectedWait,omitempty"`
 	}
 	groups := map[string]*group{}
 	var ops []opv
@@ -503,7 +505,8 @@ func (s *Server) monConnections(ctx context.Context, rc *reqCtx) (any, error) {
 			g.Active++
 			if op := mstr(d, "op"); op != "" && op != "none" && !strings.HasPrefix(app, "mongo-portal") {
 				ops = append(ops, opv{OpID: d["opid"], Op: op, NS: mstr(d, "ns"), Secs: mnum(d, "secs_running"), Client: host,
-					AppName: app, User: user, WaitingFor: mbool(d, "waitingForLock"), Plan: mstr(d, "planSummary")})
+					AppName: app, User: user, WaitingFor: mbool(d, "waitingForLock"), Plan: mstr(d, "planSummary"),
+					Expected: expectedWait(d, s.Config.Monitoring.SlowOperationIgnoreApps)})
 			}
 		} else {
 			g.Idle++
@@ -535,15 +538,18 @@ func (s *Server) monConnections(ctx context.Context, rc *reqCtx) (any, error) {
 	if ops == nil {
 		ops = []opv{}
 	}
-	slow := 0
+	slow, waiting := 0, 0
 	for _, o := range ops {
-		if o.Secs >= s.Config.Monitoring.SlowOperation.Seconds() {
+		switch {
+		case o.Expected != "":
+			waiting++
+		case o.Secs >= s.Config.Monitoring.SlowOperation.Seconds():
 			slow++
 		}
 	}
 	return map[string]any{
 		"total": total, "active": active, "idle": total - active, "internalThreads": internal,
-		"byClient": list, "operations": ops, "clientGroups": len(groups), "slowOperations": slow,
+		"byClient": list, "operations": ops, "clientGroups": len(groups), "slowOperations": slow, "expectedWaits": waiting,
 	}, nil
 }
 

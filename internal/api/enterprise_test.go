@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -158,6 +161,166 @@ func TestMongoDBOIDCProviderMismatch(t *testing.T) {
 	if w := h.do("GET", "/oauth/mongodb/nope/start", nil); !strings.HasPrefix(w.Header().Get("Location"), "/login?mongo=oidc_not_offered") {
 		t.Fatalf("unknown profile: %s", w.Header().Get("Location"))
 	}
+}
+
+// followMongoOIDC runs a MONGODB-OIDC connection from startPath through
+// the provider (with the browser's cookie jar) until the portal answers
+// with something other than another sign-in step.
+func followMongoOIDC(t *testing.T, h *harness, c *http.Client, startPath string, opts ...reqOpt) (*httptest.ResponseRecorder, []url.Values) {
+	t.Helper()
+	var asked []url.Values
+	next := startPath
+	for range 4 {
+		w := h.do("GET", next, nil, opts...)
+		auth, _ := url.Parse(w.Header().Get("Location"))
+		if w.Code != http.StatusFound || auth.Host == "" {
+			return w, asked
+		}
+		asked = append(asked, auth.Query())
+		state := cookieNamed(w, "__Host-mongo_portal_oauth")
+		resp, err := c.Get(auth.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		cb, _ := url.Parse(resp.Header.Get("Location"))
+		w = h.do("GET", cb.Path+"?"+cb.RawQuery, nil, append(slices.Clone(opts), withCookie(state))...)
+		if loc := w.Header().Get("Location"); w.Code == http.StatusFound && strings.HasPrefix(loc, "/oauth/mongodb/") {
+			next = loc
+			continue
+		}
+		return w, asked
+	}
+	t.Fatal("too many sign-in steps")
+	return nil, nil
+}
+
+// After single sign-on the portal connects to MongoDB without a password
+// and, when the provider already has a browser session, without any
+// interaction (prompt=none). Without a session it continues with the
+// provider's sign-in page, or explains why when that is turned off.
+func TestMongoDBOIDCSilentConnect(t *testing.T) {
+	h, idp, client := mongoOIDCHarness(t, nil)
+	po := h.srv.Config.Profiles[0].OIDC
+	po.AutoConnect = true
+	c := client()
+	c.Jar, _ = cookiejar.New(nil)
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	prof := decode(t, h.do("GET", "/api/v1/profiles", nil))["profiles"].([]any)[0].(map[string]any)
+	if o := prof["oidc"].(map[string]any); o["autoConnect"] != true {
+		t.Fatalf("autoConnect not exposed: %v", o)
+	}
+
+	// No provider session yet: prompt=none is answered with login_required
+	// and the portal continues interactively (one sign-in at the provider).
+	w, asked := followMongoOIDC(t, h, c, "/oauth/mongodb/primary/start?return=%2Fshell&silent=1", as("dana", "devs"))
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/shell" || cookieNamed(w, "__Host-mongo_portal_session") == nil {
+		t.Fatalf("fallback connect: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if len(asked) != 2 || asked[0].Get("prompt") != "none" || asked[1].Get("prompt") != "" || idp.Interactive != 1 {
+		t.Fatalf("expected a silent then an interactive request: %v (interactive %d)", asked, idp.Interactive)
+	}
+
+	// The browser now has a provider session (as after an OpenShift login
+	// federated to the same provider): the next connection needs no
+	// interaction at all.
+	w, asked = followMongoOIDC(t, h, c, "/oauth/mongodb/primary/start?return=%2F&silent=1", as("erin", "devs"))
+	if w.Header().Get("Location") != "/" || len(asked) != 1 || idp.Interactive != 1 {
+		t.Fatalf("silent connect: %s, %d requests, interactive %d", w.Header().Get("Location"), len(asked), idp.Interactive)
+	}
+	if ev := h.srv.Audit.Local(audit.Filter{Action: "mongodb_login", Outcome: audit.Success}); len(ev) < 2 || ev[0].Method != "mongodb-oidc" {
+		t.Fatalf("audit: %+v", ev)
+	}
+
+	// Interactive fallback turned off: the user is told why.
+	f := false
+	po.InteractiveFallback = &f
+	idp.EndSessions()
+	w, _ = followMongoOIDC(t, h, c, "/oauth/mongodb/primary/start?silent=1", as("dana", "devs"))
+	if !strings.HasPrefix(w.Header().Get("Location"), "/login?mongo=login_required") {
+		t.Fatalf("no fallback: %s", w.Header().Get("Location"))
+	}
+
+	// silent is only honoured after single sign-on.
+	w = h.do("GET", "/oauth/mongodb/primary/start?silent=1", nil)
+	if auth, _ := url.Parse(w.Header().Get("Location")); auth.Query().Get("prompt") != "" {
+		t.Fatalf("anonymous silent request: %s", auth)
+	}
+
+	// Extra authorization parameters reach the provider.
+	po.AuthParams = map[string]string{"audience": "mongodb-audience"}
+	w = h.do("GET", "/oauth/mongodb/primary/start", nil, as("dana", "devs"))
+	if auth, _ := url.Parse(w.Header().Get("Location")); auth.Query().Get("audience") != "mongodb-audience" {
+		t.Fatalf("authParams: %s", auth)
+	}
+}
+
+// A token for another audience never reaches MongoDB, and the reason is
+// precise.
+func TestMongoDBOIDCTokenChecks(t *testing.T) {
+	h, _, client := mongoOIDCHarness(t, nil)
+	h.srv.Config.Profiles[0].OIDC.Audience = "another-audience"
+	res := mongoOIDCConnect(t, h, client, as("dana", "devs"))
+	if loc := res.Header.Get("Location"); !strings.HasPrefix(loc, "/login?mongo=token_audience_mismatch") || h.calls != 0 {
+		t.Fatalf("audience mismatch: %s (connect calls %d)", loc, h.calls)
+	}
+	ev := h.srv.Audit.Local(audit.Filter{Action: "mongodb_login", Outcome: audit.Failure})
+	if len(ev) == 0 || ev[0].ErrorClass != "token_audience_mismatch" || !strings.Contains(ev[0].Reason, "another-audience") {
+		t.Fatalf("audit: %+v", ev)
+	}
+
+	for name, c := range map[string]struct{ tok, iss, aud, want string }{
+		"opaque":          {"opaque-reference-token", "https://idp", "", "token_not_jwt"},
+		"wrong issuer":    {jwtWith(`{"iss":"https://sts.example/v1","aud":"m"}`), "https://idp", "", "token_issuer_mismatch"},
+		"wrong audience":  {jwtWith(`{"iss":"https://idp/","aud":["a","b"]}`), "https://idp", "m", "token_audience_mismatch"},
+		"audience listed": {jwtWith(`{"iss":"https://idp","aud":["a","m"]}`), "https://idp", "m", ""},
+		"no audience set": {jwtWith(`{"iss":"https://idp","aud":"x"}`), "https://idp", "", ""},
+	} {
+		got := mongoconn.CheckAccessToken(c.tok, c.iss, c.aud)
+		if (got == nil) != (c.want == "") || (got != nil && got.Code != c.want) {
+			t.Errorf("%s: %+v, want %q", name, got, c.want)
+		}
+	}
+}
+
+func TestCacheManagement(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) { c.RBAC.Policy += "\ng, platform, role:platform-admin\n" })
+	if w := h.do("GET", "/api/v1/admin/caches", nil, as("dana", "devs")); w.Code != http.StatusForbidden {
+		t.Fatalf("readonly user listing caches: %d", w.Code)
+	}
+	m := decode(t, h.do("GET", "/api/v1/admin/caches", nil, as("pat", "platform")))
+	caches, _ := m["caches"].([]any)
+	if len(caches) != 5 || m["canInvalidate"] != true || m["shared"] != false {
+		t.Fatalf("cache listing: %v", m)
+	}
+	tok := h.preauth("pat", "platform")
+	body := map[string]any{"caches": []string{"rbac-policy", "mongodb-oidc-providers", "identities"}, "confirm": "nope"}
+	if w := h.do("POST", "/api/v1/admin/caches/invalidate", body, as("pat", "platform"), withHeader("X-CSRF-Token", tok)); w.Code != http.StatusPreconditionRequired {
+		t.Fatalf("unconfirmed: %d", w.Code)
+	}
+	body["confirm"], body["caches"] = "invalidate", []string{"wiredtiger"}
+	if w := h.do("POST", "/api/v1/admin/caches/invalidate", body, as("pat", "platform"), withHeader("X-CSRF-Token", tok)); w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown cache: %d", w.Code)
+	}
+	h.srv.midp.m = map[string]*mongoIdP{"primary": {at: time.Now()}}
+	body["caches"] = []string{"rbac-policy", "mongodb-oidc-providers", "identities"}
+	w := h.do("POST", "/api/v1/admin/caches/invalidate", body, as("pat", "platform"), withHeader("X-CSRF-Token", tok))
+	m = decode(t, w)
+	if w.Code != 200 || len(m["results"].([]any)) != 3 || !strings.Contains(m["note"].(string), "this replica only") || h.srv.midp.m != nil {
+		t.Fatalf("invalidate: %d %v", w.Code, m)
+	}
+	if _, at := h.srv.Identity.ReviewCacheStats(); at.IsZero() {
+		t.Fatal("identity revalidation not requested")
+	}
+	ev := h.srv.Audit.Local(audit.Filter{Action: "cache_invalidate"})
+	if len(ev) != 1 || ev[0].SSOUser != "pat" || !strings.Contains(ev[0].Target, "rbac-policy") {
+		t.Fatalf("audit: %+v", ev)
+	}
+}
+
+func jwtWith(claims string) string {
+	return "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".c2ln"
 }
 
 func TestAuditSearchExportAndScope(t *testing.T) {

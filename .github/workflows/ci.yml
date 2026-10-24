@@ -1,10 +1,16 @@
 name: ci
 
 # CI/CD for the MongoDB management portal. Pull requests and pushes run every
-# quality gate. Images are published only from a `v*` tag pushed to this
-# repository, after all gates pass, and
-# only through the protected `release` environment. Nothing is deployed to a
-# cluster from CI; production is synced manually in Argo CD.
+# quality gate. Images are published only from a `v*` tag, after all gates
+# pass, through the protected release environment, and only when the
+# publishing settings below are configured. Nothing is deployed to a cluster
+# from CI; production is synced manually (Argo CD or helm).
+#
+# Repository settings (nothing organization-specific lives in this file):
+#   variables  CONTAINER_IMAGE        image repository, e.g. registry.example.com/team/mongo-portal
+#              CONTAINER_REGISTRY     registry host for login (default docker.io)
+#              RELEASE_ENVIRONMENT    protected environment name (default release)
+#   secrets    CONTAINER_REGISTRY_USERNAME, CONTAINER_REGISTRY_TOKEN
 
 on:
   pull_request:
@@ -21,7 +27,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE: docker.io/mohankrishna999/mongo-portal
+  IMAGE: ${{ vars.CONTAINER_IMAGE }}
+  REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'docker.io' }}
 
 jobs:
   backend:
@@ -37,7 +44,14 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l . | tee /dev/stderr)"
       - run: go mod verify
-      - run: go vet ./... && go vet -tags integration ./...
+      - run: go vet ./... && go vet -tags integration ./... && go vet -tags oidc ./...
+      # GO-2026-5932 (x/crypto/openpgp): the VEX statement in security/vex
+      # says the packages are not in the binary; keep it true.
+      - name: No openpgp in the binary (GO-2026-5932)
+        run: |
+          if go list -deps ./cmd/portal | grep -E '(^|/)x/crypto/openpgp'; then
+            echo "x/crypto/openpgp is now a dependency: update security/vex and the testing report"; exit 1
+          fi
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: latest
@@ -121,16 +135,16 @@ jobs:
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             argocd/*.yaml
           # Plain (non-Kustomize) manifests
-          "$(go env GOPATH)/bin/kubeconform" -strict -summary -kubernetes-version 1.31.0 \
+          find openshift -name '*.yml' -print0 | xargs -0 "$(go env GOPATH)/bin/kubeconform" -strict -summary -kubernetes-version 1.31.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/melmorabity/openshift-json-schemas/main/v4.18-standalone-strict/{{.ResourceKind}}{{.KindSuffix}}.json' \
-            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            $(find openshift -name '*.yml')
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
       - name: Guardrails (no MongoDB workloads, no fixed UIDs, no privileged, no cluster RBAC from apps)
+        # Each check fails the step on its own (a bare "! grep" would not).
         run: |
-          ! grep -nE '^kind: (StatefulSet|PersistentVolumeClaim|Secret)$' /tmp/rendered/*.yaml
-          ! grep -nE 'runAsUser:|fsGroup:|privileged: true' /tmp/rendered/kustomize_overlays_*.yaml
-          ! grep -nE '^kind: (ClusterRole|ClusterRoleBinding)$' /tmp/rendered/kustomize_overlays_*.yaml
+          if grep -nE '^kind: (StatefulSet|PersistentVolumeClaim|Secret)$' /tmp/rendered/*.yaml; then exit 1; fi
+          if grep -nE 'runAsUser:|fsGroup:|privileged: true' /tmp/rendered/kustomize_overlays_*.yaml; then exit 1; fi
+          if grep -nE '^kind: (ClusterRole|ClusterRoleBinding)$' /tmp/rendered/kustomize_overlays_*.yaml; then exit 1; fi
       - name: Portal configuration files are valid
         working-directory: .
         run: |
@@ -141,6 +155,33 @@ jobs:
           scan-ref: /tmp/rendered
           severity: HIGH,CRITICAL
           exit-code: "1"
+
+  helm:
+    name: Helm chart – lint, render (OpenShift and Kubernetes), schemas, configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version: stable, cache-dependency-path: go.sum }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - run: go install github.com/yannh/kubeconform/cmd/kubeconform@latest && echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: bash test/helm/validate.sh
+
+  kind:
+    name: Kubernetes deployment – kind, Pod Security restricted, two replicas, NetworkPolicy, helm test
+    # A full cluster test: on main, tags and manual runs, not on every PR.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, helm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with: { install_only: true }
+      - run: docker build --target production --build-arg VERSION="${GITHUB_REF_NAME}" --build-arg COMMIT="${GITHUB_SHA}" -t mongo-portal:ci .
+      - run: bash test/kind/run.sh mongo-portal:ci
 
   secrets:
     name: Secret scanning (gitleaks)
@@ -192,6 +233,15 @@ jobs:
           for t in production debug; do
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:latest "mongo-portal:$t" --only-fixed --fail-on high
           done
+      - name: All findings, raw and with the VEX statements applied (report only)
+        run: |
+          for t in production debug; do
+            echo "== $t (raw)"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --quiet --scanners vuln "mongo-portal:$t"
+            echo "== $t (VEX applied)"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/security/vex:/vex:ro" aquasec/trivy:latest image --quiet --scanners vuln \
+              --vex /vex/mongo-portal.openvex.json --show-suppressed "mongo-portal:$t"
+          done
       - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with: { image: "mongo-portal:production", format: spdx-json, output-file: sbom-production.spdx.json, upload-artifact: false }
       - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
@@ -203,17 +253,17 @@ jobs:
 
   release:
     name: Release – publish (or verify) images, sign, GitHub release
-    if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'krishnamanaiducloud/mongo-portal'
-    needs: [backend, frontend, integration, mongodb-oidc, manifests, secrets, images]
+    if: startsWith(github.ref, 'refs/tags/v') && vars.CONTAINER_IMAGE != ''
+    needs: [backend, frontend, integration, mongodb-oidc, manifests, helm, kind, secrets, images]
     runs-on: ubuntu-latest
-    environment: release
+    environment: ${{ vars.RELEASE_ENVIRONMENT || 'release' }}
     permissions:
       contents: write
       pull-requests: write
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
+        with: { fetch-depth: 0, persist-credentials: false }
       - name: Version from tag
         id: v
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -242,8 +292,9 @@ jobs:
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: steps.existing.outputs.exists != 'true'
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_TOKEN }}
       - name: Build and push production
         id: prod
         if: steps.existing.outputs.exists != 'true'
@@ -282,8 +333,9 @@ jobs:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_TOKEN }}
       - name: Sign images (keyless, by digest)
         run: |
           cosign sign --yes "$IMAGE@${{ steps.d.outputs.prod }}"
@@ -309,15 +361,20 @@ jobs:
           fi
           notes="docs/release-notes/$v.md"
           [ -f "$notes" ] || notes=/dev/null
+          prev="$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)"
           {
             cat "$notes"
+            echo
+            echo "## Changes${prev:+ since $prev}"
+            echo
+            git log --no-merges --format='- %s (%h)' ${prev:+"$prev.."}"$GITHUB_REF_NAME"
             echo
             echo "## Images"
             echo
             echo "- \`$IMAGE:$v\` \`${{ steps.d.outputs.prod }}\`"
             echo "- \`$IMAGE:$v-debug\` \`${{ steps.d.outputs.debug }}\`"
             echo
-            echo "Signed with cosign (keyless). Verify: \`cosign verify $IMAGE@${{ steps.d.outputs.prod }} --certificate-identity-regexp 'https://github.com/krishnamanaiducloud/mongo-portal/' --certificate-oidc-issuer https://token.actions.githubusercontent.com\`"
+            echo "Signed with cosign (keyless). Verify: \`cosign verify $IMAGE@${{ steps.d.outputs.prod }} --certificate-identity-regexp '${{ github.server_url }}/${{ github.repository }}/' --certificate-oidc-issuer https://token.actions.githubusercontent.com\`"
           } > release-notes.md
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "mongo-portal $v" --notes-file release-notes.md sbom-production.spdx.json sbom-debug.spdx.json
       - name: Pin production overlay to the new digest

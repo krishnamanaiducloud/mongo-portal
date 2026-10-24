@@ -54,7 +54,6 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
 		"hasSession":    hasSession,
 		"ssoLogoutURL":  s.Config.Identity.SSOLogoutURL,
 		"environment":   s.Config.Environment,
-		"build":         s.Build,
 		"auth":          s.authOptions(),
 	}
 	if rc.p != nil {
@@ -129,7 +128,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, rc *reqCtx
 	resp := map[string]any{
 		"auth":     s.authOptions(),
 		"profiles": profiles,
-		"build":    s.Build,
 	}
 	if rc.p != nil {
 		// Operational details only for signed-in users.
@@ -186,12 +184,14 @@ type profileOIDC struct {
 	DisplayName string `json:"displayName"`
 	Issuer      string `json:"issuer"`
 	URL         string `json:"url"`
+	// AutoConnect: the UI connects SSO users without a click.
+	AutoConnect bool `json:"autoConnect"`
 }
 
 func (s *Server) viewProfile(rc *reqCtx, p *config.Profile) profileView {
 	var oidc *profileOIDC
 	if p.OIDC != nil {
-		oidc = &profileOIDC{DisplayName: p.OIDC.DisplayName, Issuer: p.OIDC.Issuer, URL: mongoOIDCPrefix + p.Name + "/start"}
+		oidc = &profileOIDC{DisplayName: p.OIDC.DisplayName, Issuer: p.OIDC.Issuer, URL: mongoOIDCPrefix + p.Name + "/start", AutoConnect: p.OIDC.AutoConnect}
 	}
 	return profileView{OIDC: oidc,
 		Name: p.Name, DisplayName: p.DisplayName, Description: p.Description,

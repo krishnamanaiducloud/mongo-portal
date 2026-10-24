@@ -75,6 +75,12 @@ func (s *Store) Status() Status {
 	return s.status
 }
 
+// Reload re-reads the policy now instead of at the next interval.
+func (s *Store) Reload() Status {
+	s.reload(false)
+	return s.Status()
+}
+
 // Watch reloads the policy every interval until ctx ends.
 func (s *Store) Watch(ctx context.Context, interval time.Duration) {
 	if s.src.Dir == "" || interval <= 0 {

@@ -62,6 +62,7 @@ type Config struct {
 	Monitoring  MonitoringConfig `yaml:"monitoring"`
 	Transfer    TransferConfig   `yaml:"transfer"`
 	Telemetry   TelemetryConfig  `yaml:"telemetry"`
+	Cache       CacheConfig      `yaml:"cache"`
 	// Store is optional shared state (audit trail, session registry) kept
 	// in a MongoDB database with a dedicated least-privilege account.
 	Store    StoreConfig `yaml:"store"`
@@ -230,8 +231,22 @@ type MonitoringConfig struct {
 	// ProfileHealthInterval defaults to 30s; a negative value disables it.
 	ProfileHealthInterval time.Duration `yaml:"profileHealthInterval"`
 	// SlowOperation marks running operations at least this old (default 5s).
+	// Operations that wait by design (awaitable hello of driver topology
+	// monitoring, tailable and change stream cursors waiting for data,
+	// oplog tailing) are reported as expected waits, never as slow.
 	SlowOperation time.Duration `yaml:"slowOperation"`
-	Thresholds    Thresholds    `yaml:"thresholds"`
+	// SlowOperationIgnoreApps lists application name prefixes whose
+	// long-running operations are expected (for example monitoring or
+	// backup agents); they are shown but not counted as slow.
+	SlowOperationIgnoreApps []string   `yaml:"slowOperationIgnoreApps"`
+	Thresholds              Thresholds `yaml:"thresholds"`
+}
+
+// CacheConfig controls the portal's own caches (never MongoDB's cache).
+type CacheConfig struct {
+	// SyncInterval is how often replicas pick up cache invalidations an
+	// administrator requested on another replica (shared store only).
+	SyncInterval time.Duration `yaml:"syncInterval"`
 }
 
 // Thresholds turn monitoring values into warnings and critical alerts.
@@ -439,6 +454,30 @@ type MongoOIDCConfig struct {
 	RequestTimeout time.Duration `yaml:"requestTimeout"`
 	// DisplayName labels the sign-in button (default: the issuer host).
 	DisplayName string `yaml:"displayName"`
+	// Audience, if set, is the access token audience MongoDB expects
+	// (oidcIdentityProviders[].audience). A token issued for another
+	// audience is refused with a precise reason before it reaches MongoDB.
+	Audience string `yaml:"audience"`
+	// AuthParams are extra authorization request parameters some providers
+	// need to issue a token for MongoDB (for example audience or resource).
+	AuthParams map[string]string `yaml:"authParams"`
+	// AutoConnect connects users who signed in to the portal with single
+	// sign-on to this profile without a click: the portal asks the provider
+	// for a token without interaction (prompt=none), which succeeds when the
+	// browser already has a session there, for example because OpenShift or
+	// the portal sign-in uses the same corporate identity provider.
+	AutoConnect bool `yaml:"autoConnect"`
+	// InteractiveFallback continues with a normal sign-in at the provider
+	// when it needs interaction (default true). With false the user sees why
+	// the automatic connection did not complete. Neither ever falls back to
+	// a password.
+	InteractiveFallback *bool `yaml:"interactiveFallback"`
+}
+
+// Interactive reports whether a silent MONGODB-OIDC sign-in may continue
+// interactively at the provider.
+func (o *MongoOIDCConfig) Interactive() bool {
+	return o.InteractiveFallback == nil || *o.InteractiveFallback
 }
 
 type TLSConfig struct {
@@ -498,8 +537,13 @@ func Load(path string) (*Config, error) {
 	return Parse(raw)
 }
 
-// Parse parses YAML configuration bytes.
+// Parse parses YAML configuration bytes. ${NAME} and ${NAME:-default}
+// placeholders in values are replaced from the environment first.
 func Parse(raw []byte) (*Config, error) {
+	raw, _, err := expand(raw, lookupEnv)
+	if err != nil {
+		return nil, err
+	}
 	cfg := &Config{}
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
@@ -643,6 +687,7 @@ func (c *Config) applyDefaults() {
 	setInt(&ss.MaxPerUser, 3)
 	setInt(&ss.MaxTotal, 200)
 	setDuration(&ss.RegistrySyncInterval, 10*time.Second)
+	setDuration(&c.Cache.SyncInterval, 10*time.Second)
 
 	q := &c.Query
 	setInt64(&q.DefaultLimit, 20)
@@ -899,6 +944,12 @@ func (c *Config) Validate() error {
 			}
 			if p.TLS.Mode != TLSEnabled && c.IsProduction() {
 				add("profiles[%s]: MONGODB-OIDC sends bearer tokens and requires tls.mode=enabled in production", p.Name)
+			}
+			for k := range o.AuthParams {
+				switch k {
+				case "client_id", "redirect_uri", "response_type", "scope", "state", "nonce", "code_challenge", "code_challenge_method", "prompt":
+					add("profiles[%s].oidc.authParams must not set %q (the portal controls it)", p.Name, k)
+				}
 			}
 		}
 		switch strings.ToLower(p.ReadPreference) {

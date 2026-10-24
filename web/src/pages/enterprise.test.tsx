@@ -4,13 +4,16 @@ import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { LoginPage } from './LoginPage';
+import { browser } from '../lib/nav';
 import { OperationsPage } from './OperationsPage';
+import { CachesPage } from './CachesPage';
 import { EntryResult, ExplainSummary, resultDocuments } from '../shell/ResultTools';
 import type { Me } from '../api/types';
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 const json = (v: unknown) => new Response(JSON.stringify(v), { headers: { 'Content-Type': 'application/json' } });
@@ -28,7 +31,7 @@ function wrap(ui: ReactNode, fetchImpl: (url: string, init?: RequestInit) => Res
 function me(over: Partial<Me['auth']> = {}): Me {
   return {
     authenticated: false, user: '', source: '', sso: false, groups: [], roles: [], permissions: {}, csrfToken: 't', hasSession: false,
-    ssoLogoutURL: '', environment: 'test', build: { version: 'v', commit: 'abcdef0' },
+    ssoLogoutURL: '', environment: 'test',
     auth: { openshift: { state: 'disabled' }, openshiftURL: '/oauth/start', header: false, dev: false, requireSSO: false, mongodbLogin: true, ...over },
   };
 }
@@ -61,9 +64,56 @@ describe('login with OpenID Connect', () => {
 
   it('connects an OIDC-only profile without a password form', async () => {
     wrap(<LoginPage me={me()} />, () => json({ profiles: [oidcProfile] }));
-    const btn = await screen.findByText('Connect with Corporate IdP (MongoDB OIDC)');
+    const btn = await screen.findByText('Connect with Corporate IdP');
     expect(btn.closest('a')?.getAttribute('href')).toBe('/oauth/mongodb/ent/start?return=%2F');
     await waitFor(() => expect(screen.queryByLabelText('MongoDB login')).toBeNull());
+    // No build, image or commit details on the sign-in page.
+    expect(document.body.textContent).not.toMatch(/\b[0-9a-f]{7,40}\b|v?\d+\.\d+\.\d+/);
+  });
+
+  it('connects automatically after single sign-on, once, and can be cancelled', async () => {
+    localStorage.clear();
+    const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+    const sso: Me = { ...me(), authenticated: true, sso: true, user: 'dana', source: 'openshift' };
+    const auto = { ...oidcProfile, oidc: { ...oidcProfile.oidc, autoConnect: true } };
+    wrap(<LoginPage me={sso} />, () => json({ profiles: [auto] }));
+    expect(await screen.findByText('Connecting to Enterprise')).toBeTruthy();
+    expect(screen.getByText('Portal sign-in')).toBeTruthy();
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('/oauth/mongodb/ent/start?return=%2F&silent=1'), { timeout: 3000 });
+    cleanup();
+
+    // A second visit within the retry window does not redirect again.
+    assign.mockClear();
+    wrap(<LoginPage me={sso} />, () => json({ profiles: [auto] }));
+    expect(await screen.findByText('Connect with Corporate IdP')).toBeTruthy();
+    expect(assign).not.toHaveBeenCalled();
+    cleanup();
+
+    // Cancelling shows the other ways to connect.
+    localStorage.clear();
+    wrap(<LoginPage me={sso} />, () => json({ profiles: [auto] }));
+    fireEvent.click(await screen.findByText('Choose another way to connect'));
+    expect(await screen.findByText('Connect with Corporate IdP')).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 900));
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('does not connect automatically after a failure', async () => {
+    localStorage.clear();
+    const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+    const sso: Me = { ...me(), authenticated: true, sso: true, user: 'dana', source: 'openshift' };
+    vi.stubGlobal('fetch', vi.fn(async () => json({ profiles: [{ ...oidcProfile, oidc: { ...oidcProfile.oidc, autoConnect: true } }] })));
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={['/login?mongo=token_audience_mismatch&profile=ent']}>
+          <LoginPage me={sso} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/issued for a different audience/)).toBeTruthy();
+    expect(screen.getByText('Diagnose connection')).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 900));
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('explains MONGODB-OIDC failures', () => {
@@ -128,5 +178,34 @@ describe('shell result tools', () => {
     expect(screen.getByText(/COLLSCAN → FETCH/)).toBeTruthy();
     expect(screen.getByText('collection scan')).toBeTruthy();
     expect(screen.getByText(/500× more documents examined than returned/)).toBeTruthy();
+  });
+});
+
+describe('caches', () => {
+  it('invalidates selected caches only after typed confirmation', async () => {
+    const calls: { url: string; body?: string }[] = [];
+    wrap(<CachesPage />, (url, init) => {
+      calls.push({ url, body: init?.body as string | undefined });
+      if (url.includes('/invalidate')) return json({ results: [{ name: 'rbac-policy', ok: true }], scope: 'all', note: 'Applied here; other replicas apply it within 10s.' });
+      return json({
+        pod: 'portal-a', shared: true, canInvalidate: true,
+        caches: [
+          { name: 'identities', title: 'Signed-in identities and groups', description: 'd', entries: 2 },
+          { name: 'rbac-policy', title: 'RBAC policy', description: 'd', entries: 1, refreshedAt: '2026-01-01T00:00:00Z' },
+        ],
+        recent: [{ id: '1', caches: ['identities'], requestedBy: 'pat', origin: 'portal-b', at: '2026-01-01T00:00:00Z', applied: [{ pod: 'portal-b', at: '2026-01-01T00:00:00Z' }] }],
+      });
+    });
+    await screen.findByText('RBAC policy');
+    expect(screen.getByText('portal-b')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('checkbox')[1]);
+    fireEvent.click(screen.getByText(/Invalidate 1 selected/));
+    const invalidate = await screen.findByRole('button', { name: 'Invalidate' });
+    expect((invalidate as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: 'invalidate' } });
+    fireEvent.click(invalidate);
+    await screen.findByText('Caches invalidated');
+    const post = calls.find((c) => c.url.includes('/invalidate'));
+    expect(JSON.parse(post!.body!)).toEqual({ caches: ['rbac-policy'], scope: 'all', confirm: 'invalidate' });
   });
 });

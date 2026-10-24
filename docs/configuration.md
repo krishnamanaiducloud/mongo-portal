@@ -7,6 +7,35 @@ file with `mongo-portal --check-config --config file.yaml`.
 
 Secrets are never placed in this file; it references mounted files instead.
 
+Check a configuration against its environment without changing anything:
+`mongo-portal preflight --config file.yaml` (see [preflight.md](preflight.md)).
+
+## Placeholders
+
+Any value (not a key) may reference environment variables, so one file
+serves every organization and environment:
+
+| Form | Meaning |
+| --- | --- |
+| `${NAME}` | The variable's value. Unset or empty is an error that names the variable. |
+| `${NAME:-default}` | The value, or `default` when unset or empty (`${NAME:-}` allows empty). |
+| `$${` | A literal `${`. |
+
+Values are substituted after the YAML is parsed, so a variable can never add
+YAML structure. An unquoted placeholder takes the type of its value
+(`maxPoolSize: ${POOL:-5}` is a number); a quoted one stays a string.
+`mongo-portal preflight` lists the variables a file uses.
+
+```yaml
+server:
+  publicOrigin: ${PORTAL_PUBLIC_URL}
+profiles:
+  - name: ${MONGODB_PROFILE_ID:-primary}
+    uri: mongodb://${MONGODB_HOSTS}/
+    replicaSet: ${MONGODB_REPLICA_SET}
+    tls: {mode: enabled, caFile: /etc/mongo-portal/mongodb-ca/ca.crt}
+```
+
 ## Top level
 
 | Key | Default | Description |
@@ -85,7 +114,8 @@ Portal RBAC; see [rbac.md](rbac.md).
 | Key | Default | Description |
 | --- | --- | --- |
 | `profileHealthInterval` | `30s` | Background health check of every connection profile with the unauthenticated `hello` command (no credentials). Shown on the login page and the System status page. Negative disables it. |
-| `slowOperation` | `5s` | Running operations at least this old are flagged as slow. |
+| `slowOperation` | `5s` | Running operations at least this old are flagged as slow. Operations that wait by design are shown as *expected waits* and never counted: awaitable `hello` of driver topology monitoring, change streams and other tailable cursors waiting for data, oplog tailing. Only command names, the first pipeline stage name and cursor flags are read for this, never query values. |
+| `slowOperationIgnoreApps` | — | Application name prefixes whose long operations are expected (for example backup or monitoring agents). |
 | `thresholds.replicationLagWarning` / `replicationLagCritical` | `10s` / `60s` | Replication lag alerts. |
 | `thresholds.connectionsWarnPercent` | `80` | Connections in use vs the server limit. |
 | `thresholds.cacheUsedWarnPercent` / `cacheDirtyWarnPercent` | `95` / `5` | WiredTiger cache fullness and dirty share. |
@@ -132,6 +162,15 @@ never used for user operations. See [audit.md](audit.md), [sessions.md](sessions
 | `persist` | `false` | Also write events to the store (needs `store.enabled`). |
 | `retention` | `0` (keep) | TTL for stored events, for example `2160h`. |
 | `collection` | `audit_events` | |
+
+## `cache`
+
+The portal's own caches (sign-in provider discovery, identity reviews, the
+RBAC policy, profile health); never MongoDB's cache. See [cache.md](cache.md).
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `syncInterval` | `10s` | How often replicas apply cache invalidations requested on another replica (needs `store.enabled`). |
 
 ## `telemetry.tracing`
 
@@ -202,6 +241,10 @@ See [observability.md](observability.md).
 | `oidc.clientSecretFile` / `caFile` / `extraCAFiles` | — | Confidential client secret; trusted CAs for the IdP. |
 | `oidc.allowedHosts` | URI hosts | Hosts the driver may send the token to. |
 | `oidc.displayName` / `requestTimeout` | issuer host / `10s` | |
+| `oidc.audience` | — | The access token audience MongoDB expects (`oidcIdentityProviders[].audience`). A token for another audience is refused with that reason before it reaches MongoDB. |
+| `oidc.authParams` | — | Extra authorization request parameters a provider needs to issue a token for MongoDB (for example `audience` or `resource`). Parameters the portal controls are rejected. |
+| `oidc.autoConnect` | `false` | After single sign-on, connect to this profile without a click using a silent authorization request (`prompt=none`). Succeeds without any prompt when the browser already has a session at the provider, for example because OpenShift or the portal sign-in federates to it. |
+| `oidc.interactiveFallback` | `true` | When the silent request needs the user, continue with the provider's sign-in page. With `false` the user sees why instead. Never falls back to a password. |
 | `readPreference` | `primary` | |
 | `connectTimeout` / `serverSelectionTimeout` / `operationTimeout` | `10s` / `10s` / `2m` | |
 | `maxPoolSize` / `maxConnIdleTime` | `5` / `5m` | Per user session. |

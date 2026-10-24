@@ -46,6 +46,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		os.Exit(healthcheck(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "preflight" {
+		os.Exit(runPreflight(os.Args[2:]))
+	}
 	configPath := flag.String("config", envOr("PORTAL_CONFIG", "/etc/mongo-portal/config.yaml"), "path to the configuration file")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	checkConfig := flag.Bool("check-config", false, "validate configuration and exit")
@@ -201,9 +204,11 @@ func run(cfg *config.Config, logger *slog.Logger) error {
 		if cfg.Session.Registry {
 			deps.Registry = st.Sessions()
 		}
+		deps.Invalidations = st.Invalidations()
 	}
 	srv = api.New(deps)
 	go srv.RunRegistry(ctx, cfg.Session.RegistrySyncInterval)
+	go srv.RunCacheSync(ctx, cfg.Cache.SyncInterval)
 	go srv.RunJobs(ctx)
 
 	var ready atomic.Bool

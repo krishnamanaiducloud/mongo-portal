@@ -62,3 +62,17 @@ export function rememberProfile(name: string) {
     // ignore
   }
 }
+
+/** Clears what this browser remembers for the portal: recent namespaces,
+ * the last profile and the automatic-connection marker, and saved shell
+ * snippets only when asked. The theme is a display preference and stays. */
+export function clearPersonalData(opts: { snippets: boolean }) {
+  const keys = ['mongo-portal-recent', PROFILE_KEY];
+  if (opts.snippets) keys.push('mongo-portal-shell-snippets');
+  try {
+    for (const k of keys) localStorage.removeItem(k);
+    localStorage.removeItem('mongo-portal-autoconnect');
+  } catch {
+    // storage unavailable; nothing to clear
+  }
+}

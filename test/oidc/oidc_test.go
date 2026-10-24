@@ -6,12 +6,14 @@
 package oidc
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -24,6 +26,7 @@ import (
 	"github.com/krishnamanaiducloud/mongo-portal/internal/config"
 	"github.com/krishnamanaiducloud/mongo-portal/internal/identity"
 	"github.com/krishnamanaiducloud/mongo-portal/internal/metrics"
+	"github.com/krishnamanaiducloud/mongo-portal/internal/preflight"
 	"github.com/krishnamanaiducloud/mongo-portal/internal/rbac"
 	"github.com/krishnamanaiducloud/mongo-portal/internal/session"
 )
@@ -79,11 +82,7 @@ func newPortal(t *testing.T, client string) *portal {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Profiles = []config.Profile{{Name: "ent", DisplayName: "ent", URI: mongoURI, DefaultAuthSource: "admin", AuthMechanisms: []string{"SCRAM-SHA-256", config.MechanismOIDC},
-		ReadPreference: "primary", ConnectTimeout: 5 * time.Second, ServerSelectionTimeout: 10 * time.Second, OperationTimeout: 30 * time.Second,
-		MaxPoolSize: 5, MaxConnIdleTime: time.Minute, TLS: config.TLSConfig{Mode: config.TLSEnabled, CAFile: ca, MinVersion: "1.2"},
-		OIDC: &config.MongoOIDCConfig{Issuer: issuer, ClientID: client, Scopes: []string{"openid", "offline_access"}, CAFile: ca,
-			AllowedHosts: []string{"mongooidc"}, RequestTimeout: 10 * time.Second}}}
+	cfg.Profiles = []config.Profile{entProfile(client)}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	key := []byte("oidc-test-session-key-0123456789abcdef")
 	res, _ := identity.NewResolver(identity.Options{Config: cfg.Identity, Key: key, SecureCookie: true, MaxAge: time.Hour, Logger: logger})
@@ -92,6 +91,53 @@ func newPortal(t *testing.T, client string) *portal {
 	t.Cleanup(st.Close)
 	srv := api.New(api.Deps{Config: cfg, Identity: res, RBAC: rb, CSRFKey: key, Store: st, Audit: audit.New(logger, 100), Metrics: metrics.New(), Logger: logger})
 	return &portal{t: t, h: srv.Handler()}
+}
+
+func entProfile(client string) config.Profile {
+	return config.Profile{Name: "ent", DisplayName: "ent", URI: mongoURI, DefaultAuthSource: "admin", AuthMechanisms: []string{"SCRAM-SHA-256", config.MechanismOIDC},
+		ReadPreference: "primary", ConnectTimeout: 5 * time.Second, ServerSelectionTimeout: 10 * time.Second, OperationTimeout: 30 * time.Second,
+		MaxPoolSize: 5, MaxConnIdleTime: time.Minute, TLS: config.TLSConfig{Mode: config.TLSEnabled, CAFile: ca, MinVersion: "1.2"},
+		OIDC: &config.MongoOIDCConfig{Issuer: issuer, ClientID: client, Scopes: []string{"openid", "offline_access"}, CAFile: ca,
+			AllowedHosts: []string{"mongooidc"}, RequestTimeout: 10 * time.Second}}
+}
+
+// The preflight reads which provider MongoDB trusts without sending any
+// token, and reports a profile configured for another client.
+func TestPreflightReadsServerIdP(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{Profiles: []config.Profile{entProfile(clientID)}}
+	before := idpStats(t)["issued"]
+	rep := preflight.ProfileReport(ctx, cfg, "ent", preflight.Options{Timeout: 10 * time.Second})
+	checks := map[string]preflight.Result{}
+	for _, r := range rep.Results {
+		checks[r.Check] = r
+	}
+	if r := checks["MONGODB-OIDC server"]; r.Status != preflight.Pass || !strings.Contains(r.Detail, issuer) {
+		t.Fatalf("server idp: %+v", rep.Results)
+	}
+	if r := checks["MONGODB-OIDC provider"]; r.Status != preflight.Pass {
+		t.Fatalf("provider discovery: %+v", r)
+	}
+	if r := checks["MongoDB version"]; r.Status != preflight.Pass || !strings.Contains(r.Detail, "Enterprise") {
+		t.Fatalf("version: %+v", r)
+	}
+	// The test PKI is short-lived: expiry may warn, verification must pass.
+	if r := checks["TLS"]; r.Status == preflight.Fail || !strings.Contains(r.Detail, "verified") {
+		t.Fatalf("tls: %+v", r)
+	}
+	if rep.Failed() {
+		t.Fatalf("unexpected failures: %+v", rep.Results)
+	}
+	if idpStats(t)["issued"] != before {
+		t.Fatal("the preflight must not obtain tokens")
+	}
+	cfg.Profiles[0] = entProfile("other-client")
+	rep = preflight.ProfileReport(ctx, cfg, "ent", preflight.Options{Timeout: 10 * time.Second})
+	for _, r := range rep.Results {
+		if r.Check == "MONGODB-OIDC server" && (r.Status != preflight.Fail || !strings.Contains(r.Detail, "other-client")) {
+			t.Fatalf("client mismatch: %+v", r)
+		}
+	}
 }
 
 func (p *portal) do(method, path string, cookies []*http.Cookie, body io.Reader, hdr ...string) *httptest.ResponseRecorder {
@@ -212,6 +258,99 @@ func TestMongoDBOIDCRefusals(t *testing.T) {
 	other := newPortal(t, "other-client")
 	if w := other.connect(); !strings.HasPrefix(w.Header().Get("Location"), "/login?mongo=mongo_oidc_failed") || sessionCookie(w) != nil {
 		t.Fatalf("client mismatch: %s", w.Header().Get("Location"))
+	}
+}
+
+// The acceptance path: a user signs in through OpenShift, whose OAuth
+// server federates to the corporate provider (simulated here by an
+// interactive sign-in of another client at the same provider, which leaves
+// a provider session in the browser). The portal then connects to MongoDB
+// with MONGODB-OIDC without a password and without any further interaction,
+// and MongoDB enforces that identity's own privileges.
+func TestSeamlessMongoDBOIDCAfterSSO(t *testing.T) {
+	idpControl(t, "/test/user?sub=u-1001")
+	idpControl(t, "/test/ttl?seconds=300")
+	idpControl(t, "/test/end-sessions")
+	b := browser(t)
+	b.Jar, _ = cookiejar.New(nil)
+
+	// 1. Corporate sign-in on behalf of the OpenShift OAuth server.
+	upstream := issuer + "/authorize?" + url.Values{"client_id": {"openshift-oauth"}, "response_type": {"code"}, "scope": {"openid"},
+		"redirect_uri": {"https://oauth-openshift.apps.cluster.test/oauth2callback/corporate"}, "state": {"s"},
+		"code_challenge": {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"}, "code_challenge_method": {"S256"}}.Encode()
+	resp, err := b.Get(upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	before := idpStats(t)["interactive"]
+
+	// 2. The portal connects automatically (silent=1 is what the UI uses
+	// for profiles with autoConnect).
+	p := newPortal(t, clientID)
+	w := p.do("GET", "/oauth/mongodb/ent/start?return=%2F&silent=1", nil, nil)
+	auth, _ := url.Parse(w.Header().Get("Location"))
+	if auth.Query().Get("prompt") != "none" {
+		t.Fatalf("expected a silent authorization request: %s", auth)
+	}
+	var state *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if strings.HasSuffix(c.Name, "_oauth") {
+			state = c
+		}
+	}
+	resp, err = b.Get(auth.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	cb, _ := url.Parse(resp.Header.Get("Location"))
+	w = p.do("GET", cb.Path+"?"+cb.RawQuery, []*http.Cookie{state}, nil)
+	sc := sessionCookie(w)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/" || sc == nil {
+		t.Fatalf("automatic connection: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	if after := idpStats(t)["interactive"]; after != before {
+		t.Fatalf("the MongoDB connection needed an interactive sign-in (%d -> %d)", before, after)
+	}
+
+	// 3. MongoDB authenticated the user's own identity and authorizes it.
+	sess := decode(p.do("GET", "/api/v1/session", []*http.Cookie{sc}, nil))
+	if id, _ := sess["identity"].(map[string]any); sess["mechanism"] != "MONGODB-OIDC" || sess["mongoUser"] != "testidp/u-1001" || id["user"] != "dana" {
+		t.Fatalf("session: %v", sess)
+	}
+	if w := p.do("GET", "/api/v1/databases/app/collections/orders/documents", []*http.Cookie{sc}, nil); w.Code != 200 {
+		t.Fatalf("read: %d %s", w.Code, w.Body)
+	}
+	csrf, _ := sess["csrfToken"].(string)
+	w = p.do("POST", "/api/v1/databases/app/collections/orders/documents", []*http.Cookie{sc}, strings.NewReader(`{"document":"{\"x\":1}"}`),
+		"Content-Type", "application/json", "X-CSRF-Token", csrf)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("write must be refused by MongoDB: %d %s", w.Code, w.Body)
+	}
+
+	// 4. Without a provider session the silent request is refused by the
+	// provider and the portal continues with its sign-in page (never a
+	// password).
+	idpControl(t, "/test/end-sessions")
+	w = p.do("GET", "/oauth/mongodb/ent/start?return=%2F&silent=1", nil, nil)
+	for _, c := range w.Result().Cookies() {
+		if strings.HasSuffix(c.Name, "_oauth") {
+			state = c
+		}
+	}
+	resp, err = browser(t).Get(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	cb, _ = url.Parse(resp.Header.Get("Location"))
+	if cb.Query().Get("error") != "login_required" {
+		t.Fatalf("provider answer without session: %s", cb)
+	}
+	w = p.do("GET", cb.Path+"?"+cb.RawQuery, []*http.Cookie{state}, nil)
+	if loc := w.Header().Get("Location"); loc != "/oauth/mongodb/ent/start?return=%2F" {
+		t.Fatalf("interactive continuation: %s", loc)
 	}
 }
 

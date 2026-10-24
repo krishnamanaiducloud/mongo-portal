@@ -33,7 +33,7 @@ const (
 type Status struct {
 	State     string    `json:"state"`
 	Reason    string    `json:"reason,omitempty"`
-	CheckedAt time.Time `json:"checkedAt,omitempty"`
+	CheckedAt time.Time `json:"checkedAt,omitzero"`
 	Issuer    string    `json:"issuer,omitempty"`
 }
 

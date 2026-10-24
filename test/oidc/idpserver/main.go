@@ -1,6 +1,6 @@
 // Command idpserver serves the test OpenID Connect provider over TLS for the
 // MONGODB-OIDC integration test (test/oidc). Test-only control endpoints
-// change the signed-in user and the token lifetime.
+// change the signed-in user and the token lifetime and end browser sessions.
 package main
 
 import (
@@ -34,8 +34,11 @@ func main() {
 		s, _ := strconv.Atoi(r.URL.Query().Get("seconds"))
 		idp.TokenTTL = time.Duration(s) * time.Second
 	})
+	mux.HandleFunc("POST /test/end-sessions", func(w http.ResponseWriter, r *http.Request) {
+		idp.EndSessions()
+	})
 	mux.HandleFunc("GET /test/stats", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]int{"issued": idp.Issued, "refreshed": idp.Refreshed})
+		_ = json.NewEncoder(w).Encode(map[string]int{"issued": idp.Issued, "refreshed": idp.Refreshed, "interactive": idp.Interactive})
 	})
 	srv := &http.Server{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Printf("test idp listening on %s (issuer %s)", *addr, *issuer)

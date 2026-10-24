@@ -1,0 +1,13 @@
+mongo-portal {{ .Chart.AppVersion }} is deployed as {{ include "mongo-portal.fullname" . }} in {{ .Release.Namespace }}.
+
+Check the environment without changing anything:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs
+
+Before users sign in, make sure these exist (none is created by the chart):
+  - Secret {{ .Values.secrets.session }} (key session-key, >= 32 random bytes){{ if gt (int .Values.replicaCount) 1 }} - required with several replicas{{ end }}
+  - ConfigMap {{ .Values.mongodbCA.configMap }} (key ca.crt) when MongoDB uses TLS
+{{- if not (and (eq .Values.platform "openshift") .Values.tls.serviceCA) }}
+  - Secret {{ .Values.tls.secretName }} (tls.crt, tls.key) for the portal's HTTPS listener
+{{- end }}
+
+Configuration: docs/ORGANIZATION_CONFIGURATION.md

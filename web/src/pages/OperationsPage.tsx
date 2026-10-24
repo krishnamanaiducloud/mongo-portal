@@ -159,6 +159,13 @@ export function OperationsPage() {
                         slow
                       </Label>
                     )}
+                    {o.expectedWait && (
+                      <Tooltip content={`${o.expectedWait}. This is normal and not counted as slow.`}>
+                        <Label isCompact color="teal" className="pf-v6-u-ml-sm">
+                          expected wait
+                        </Label>
+                      </Tooltip>
+                    )}
                     {o.waitingForLock && (
                       <Label isCompact color="orange" className="pf-v6-u-ml-sm">
                         waiting for lock

@@ -10,6 +10,9 @@ import type {
   AdminSessions,
   AuditPage,
   AuditQuery,
+  CachesInfo,
+  DiagnosticsReport,
+  InvalidateResult,
   IndexUsage,
   Job,
   Me,
@@ -44,6 +47,7 @@ export const keys = {
   audit: (scope: string) => ['audit', scope] as const,
   status: ['status'] as const,
   permissions: ['permissions'] as const,
+  caches: ['caches'] as const,
 };
 
 export function useMe() {
@@ -439,5 +443,29 @@ export function useIndexUsage(db: string, coll: string) {
     queryKey: ['indexUsage', db, coll],
     queryFn: () => api<{ indexes: IndexUsage[]; note: string }>(`${nsPath(db, coll)}/index-stats`),
     retry: false,
+  });
+}
+
+export function useProfileDiagnostics() {
+  return useMutation({
+    mutationFn: (profile: string) => api<DiagnosticsReport>(`/profiles/${enc(profile)}/diagnostics`),
+  });
+}
+
+export function useCaches(enabled = true) {
+  return useQuery({ queryKey: keys.caches, queryFn: () => api<CachesInfo>('/admin/caches'), enabled, retry: false, refetchInterval: 15_000 });
+}
+
+export function useInvalidateCaches() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (r: { caches: string[]; scope: 'all' | 'replica'; confirm: string }) =>
+      api<InvalidateResult>('/admin/caches/invalidate', { method: 'POST', body: r }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: keys.caches });
+      void qc.invalidateQueries({ queryKey: keys.me });
+      void qc.invalidateQueries({ queryKey: keys.status });
+      void qc.invalidateQueries({ queryKey: keys.profiles });
+    },
   });
 }

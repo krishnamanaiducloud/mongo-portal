@@ -22,6 +22,7 @@ import { TransferPage } from './pages/TransferPage';
 import { OperationsPage } from './pages/OperationsPage';
 import { AdminSessionsPage } from './pages/AdminSessionsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { CachesPage } from './pages/CachesPage';
 
 function Loading() {
   return (
@@ -69,6 +70,7 @@ export function App() {
           <Route path="operations" element={<OperationsPage />} />
           <Route path="admin/sessions" element={<AdminSessionsPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="admin/caches" element={<CachesPage />} />
           <Route path="db/:db" element={<DatabasePage />} />
           <Route path="db/:db/:coll" element={<CollectionPage />} />
           <Route path="session" element={<SessionPage me={me.data} />} />

@@ -39,6 +39,8 @@ type oauthState struct {
 	// MONGODB-OIDC connection.
 	Provider string `json:"p,omitempty"`
 	Profile  string `json:"pr,omitempty"`
+	// Silent marks an automatic MONGODB-OIDC connection (prompt=none).
+	Silent bool `json:"si,omitempty"`
 }
 
 func (s *Server) stateCookieName() string {

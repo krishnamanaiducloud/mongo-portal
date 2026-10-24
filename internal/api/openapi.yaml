@@ -527,6 +527,48 @@ paths:
         "200": { $ref: "#/components/responses/OK" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/caches:
+    get:
+      tags: [identity]
+      summary: The portal's own caches on this replica and recent invalidations (cache get)
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/caches/invalidate:
+    post:
+      tags: [identity]
+      summary: Invalidate portal caches on this replica or every replica (cache delete); never touches MongoDB data or caches
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [caches, confirm]
+              properties:
+                caches:
+                  type: array
+                  items: { type: string, enum: [identities, sign-in-providers, mongodb-oidc-providers, rbac-policy, profile-health] }
+                scope: { type: string, enum: [all, replica], default: all }
+                confirm: { type: string, description: 'must be "invalidate"' }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "428": { description: Confirmation required }
+  /profiles/{name}/diagnostics:
+    get:
+      tags: [identity]
+      summary: Read-only connection diagnostics of one profile (DNS, TCP, TLS, topology, version, MONGODB-OIDC provider); no credentials are sent (monitoring get)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: Unknown profile }
+        "429": { description: Diagnostics already running }
   /settings:
     get:
       tags: [identity]

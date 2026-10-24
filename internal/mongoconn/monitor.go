@@ -75,21 +75,30 @@ func (m *Monitor) Run(ctx context.Context) {
 	}
 	defer m.close()
 	for {
-		var wg sync.WaitGroup
-		for i := range m.profiles {
-			wg.Add(1)
-			go func(p *config.Profile) {
-				defer wg.Done()
-				m.check(ctx, p)
-			}(&m.profiles[i])
-		}
-		wg.Wait()
+		m.CheckNow(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(m.interval):
 		}
 	}
+}
+
+// CheckNow checks every profile immediately (also used to refresh the
+// health shown on the login page on request).
+func (m *Monitor) CheckNow(ctx context.Context) {
+	if m.interval <= 0 {
+		return
+	}
+	var wg sync.WaitGroup
+	for i := range m.profiles {
+		wg.Add(1)
+		go func(p *config.Profile) {
+			defer wg.Done()
+			m.check(ctx, p)
+		}(&m.profiles[i])
+	}
+	wg.Wait()
 }
 
 func (m *Monitor) client(p *config.Profile) (*mongo.Client, error) {

@@ -1,165 +1,133 @@
 # Testing and validation report
 
-Release: **0.0.2** · Date: 2026-10-24 · Environment: Windows 10 + WSL2 Ubuntu,
-Docker, Go 1.27.3 (toolchain pinned in `go.mod`), Node 24, MongoDB 8.0 test
-containers, MongoDB Enterprise 7.0 for MONGODB-OIDC. No OpenShift cluster, no
-production identity provider and no production MongoDB were available or
-contacted; those items are listed under "Not environment-validated".
+Release: **0.0.3** · Date: 2026-10-24 · Environment: Windows 10 + WSL2 Ubuntu,
+Docker 29, Go 1.27.3 (toolchain pinned in `go.mod`), Node 24, MongoDB 8.0 test
+containers, MongoDB Enterprise 7.0 for MONGODB-OIDC, kind (Kubernetes 1.35)
+for the deployment test. No OpenShift cluster, no production identity
+provider and no production MongoDB were available or contacted.
+
+## Validation matrix
+
+PASS means the test ran and passed here. Live OpenShift tests could not run
+(no cluster access) and are **BLOCKED**, never PASS.
+
+| Capability | Local test | Integration test | Live OpenShift test | Status |
+| --- | --- | --- | --- | --- |
+| OpenShift OAuth | PASS (fake OAuth server: code flow, PKCE, state, replay, `users/~`, revalidation) | NOT APPLICABLE (needs an OpenShift OAuth server) | BLOCKED | Implemented; not live-tested |
+| Generic OIDC sign-in | PASS (test IdP: discovery, PKCE, nonce, issuer/audience/expiry/signature, groups, logout) | NOT TESTED against a real tenant | BLOCKED (needs organization IdP) | Implemented; requires organization configuration |
+| MongoDB OIDC | PASS (silent connect, fallback, token checks) | PASS (MongoDB Enterprise 7.0 + test IdP: 6 / 6, including SSO → MongoDB without a second sign-in) | BLOCKED (needs organization IdP and MongoDB) | Implemented and tested; not live-validated |
+| SCRAM | PASS | PASS (replica set, TLS and non-TLS; kind) | BLOCKED | Implemented and tested |
+| TLS | PASS (preflight: untrusted CA, verification) | PASS (custom CA, client certificates, wrong CA, host name mismatch, no downgrade; preflight) | BLOCKED | Implemented and tested |
+| RBAC | PASS | PASS (read-only, MongoDB-enforced roles, cache RBAC on kind) | BLOCKED | Implemented and tested |
+| Shared sessions | PASS | PASS (registry and revocation across two replicas: integration and kind) | BLOCKED | Implemented and tested on Kubernetes |
+| Cache management | PASS (API, UI) | PASS (invalidation applied by both replicas: integration and kind) | BLOCKED | Implemented and tested on Kubernetes |
+| Audit logging | PASS | PASS (durable store, search across replicas, hash chain, tamper detection) | BLOCKED | Implemented and tested |
+| MongoDB monitoring | PASS | PASS (members, connections, oplog, expected waits vs slow) | BLOCKED | Implemented and tested |
+| Shell | PASS | PASS (integration, browser e2e) | BLOCKED | Implemented and tested |
+| Import / export | PASS | PASS (round trips in every format, validators, RBAC, MongoDB privileges) | BLOCKED | Implemented and tested |
+| OpenShift random UID | PASS (smoke: UIDs 1000680000, 123456, 65532, GID 0, read-only rootfs) | PASS (kind, Pod Security restricted, UID 1000680000) | BLOCKED (SCC admission not exercised) | Emulated; OpenShift admission not tested |
+| Multi-replica deployment | PASS | PASS (kind: two replicas, rolling restart, NetworkPolicy enforcement) | BLOCKED | Tested on Kubernetes, not OpenShift |
 
 ## Results
 
 | Area | Command | Result |
 | --- | --- | --- |
 | Go format / vet | `gofmt -l`, `go vet ./...` (+ `-tags integration`, `-tags oidc`), `go mod verify` | clean |
-| Go unit tests | `go test -race ./internal/...` | **pass** (11 packages; see note) |
+| Go unit tests | `go test -race ./internal/...` | **pass** (12 packages) |
 | Web lint / types | `npm run lint`, `npm run typecheck` | clean |
-| Web unit tests | `npm test` (Vitest) | **45 / 45 pass** (6 files) |
+| Web unit tests | `npm test` (Vitest) | **48 / 48 pass** (6 files) |
 | Web build | `npm run build` | pass |
-| Integration (real MongoDB) | `test/integration/run.sh` | **16 / 16 tests pass** |
-| MONGODB-OIDC (MongoDB Enterprise 7.0 + test identity provider) | `test/oidc/run.sh` | **4 / 4 tests pass** |
+| Integration (real MongoDB) | `test/integration/run.sh` | **19 / 19 tests pass** |
+| MONGODB-OIDC (MongoDB Enterprise 7.0 + test IdP) | `test/oidc/run.sh` | **6 / 6 tests pass** |
+| Kubernetes deployment (kind) | `test/kind/run.sh` | **19 / 19 checks pass** |
+| Helm chart | `test/helm/validate.sh` | lint, required values, schema, 44 / 44 rendered resources valid (Kubernetes, OpenShift 4.18, CRD schemas), guardrails, rendered configuration valid |
 | Container smoke | `test/container/smoke.sh` (3 UIDs × 2 images) | **74 / 74 checks pass** |
 | Browser end to end | `test/e2e/run.sh` (Chromium) | **PASS** |
-| Kustomize + schema | `kubectl kustomize` + `kubeconform -strict` (Kubernetes 1.31, OpenShift 4.18, CRD schemas) | dev, test, prod, cluster and all components: 49 / 49 valid; Argo CD: 6 / 6; plain manifests: 13 / 13 |
-| Manifest guardrails | no StatefulSet/PVC/Secret, no fixed UID/fsGroup, no privileged, no cluster RBAC in the app overlays | pass |
-| Configuration check | `mongo-portal --check-config` on the dev, test and plain OpenShift configurations | valid |
+| Kustomize + schema | `kubectl kustomize` + `kubeconform -strict` | 49 / 49 valid; Argo CD 6 / 6; plain manifests 13 / 13 |
+| Manifest guardrails | no StatefulSet/PVC/Secret, no fixed UID/fsGroup, no privileged, no cluster RBAC in app overlays | pass |
+| Configuration check | `--check-config` on dev, test and plain OpenShift configurations, and on the Helm-rendered ones | valid |
+| OpenShift preflight script | `scripts/preflight-openshift.sh` with `OC=kubectl` against the kind deployment | ran end to end (OpenShift-only checks skipped, in-pod preflight passed); resource versions unchanged afterwards (read-only) |
 
-Note: in the first full run `TestOpenShiftLoginFlow` failed once with a probe
-timeout against its local fake server while the race-instrumented build was
-competing for CPU. It then passed 20 / 20 in isolation and the whole unit
-suite passed 3 / 3; the test's request timeout was raised from 3 s to 10 s.
-No product code was changed for it.
-
-### Integration tests (disposable 3-member replica set and TLS replica set)
+### New in 0.0.3 (tests)
 
 | Test | Covers |
 | --- | --- |
-| `TestNonTLSAuthentication` | valid login, wrong password, unknown user, authentication-database mismatch, SCRAM-SHA-1 legacy user, mechanism restriction |
-| `TestTLSAuthentication` | TLS with custom CA and client certificate, client certificate required by the server, untrusted CA, hostname mismatch, no plaintext/TLS downgrade |
-| `TestUnavailableAndTimeout` | unreachable host, blackhole address, bounded timeouts |
-| `TestConcurrentSessionsAreIndependent` | parallel logins as several users, each connection authenticated as its own principal |
-| `TestDeveloperReadOnlyEndToEnd` | a group mapped to `role:readonly` cannot write even with a write-capable MongoDB user; `$out` blocked and verified not written |
-| `TestSRERespectsMongoDBRoles` | admin portal role with a read-only MongoDB user: MongoDB denies writes (403) |
-| `TestSRECrudEndToEnd` (TLS and non-TLS) | collections, documents (Long/Date/ObjectId/Decimal128), `_id` immutability, unique index and duplicate key (409), confirmations, `$where` rejected, stats, server info, logout |
-| `TestQueryLimitsAndTimeouts` | pagination, server-side `maxTimeMS` |
-| `TestShellOperations` | shell API: writes, cursor paging, aggregate, count, distinct, explain, confirmations, refused commands |
-| `TestMonitoring` | replica set members (one primary), connections total = active + idle, total size, session pool; a user without `clusterMonitor` gets an explanation while sizes still work |
-| `TestDefaultRoleFollowsMongoDB` | unmapped users follow their MongoDB privileges: a writer inserts, a reader is refused by MongoDB |
-| `TestReplicaSetFailover` | primary step-down; existing sessions keep working |
-| `TestExportImportRoundTrip` | 750 documents exported and re-imported identically as canonical NDJSON, gzip-compressed JSON array and BSON; filtered, projected CSV export; gzip-compressed CSV import with field mapping; database archive whose manifest matches its files |
-| `TestImportRulesAndAuthorization` | collection validators, upsert by `_id`, dry run writes nothing, `role:readonly` may export but not import (portal RBAC), a read-only MongoDB user's import fails per batch (MongoDB), system collections refused |
-| `TestOperationsAndKill` | `$currentOp` listing filtered by namespace; `killOp` requires confirmation, is refused by MongoDB for a user without the `killop` privilege, ends the target operation, and a second kill is refused; idle connections listed separately and never killable |
-| `TestSharedStoreAuditAndRegistry` | two replicas share the store: audit events of one are searchable on the other, an administrator on one replica sees and revokes a session held by the other; altering a stored event breaks the hash chain; the retention TTL index exists |
+| `TestSeamlessMongoDBOIDCAfterSSO` (Enterprise) | a corporate sign-in on behalf of another client leaves an IdP session (as OpenShift OAuth federation does); the portal connects with `prompt=none`; the IdP shows no further sign-in; MongoDB authenticates `testidp/u-1001` and refuses a write it does not grant; without an IdP session the portal continues interactively |
+| `TestPreflightReadsServerIdP` (Enterprise) | the preflight reads the issuer and client id MongoDB announces without obtaining a token; a client id mismatch fails |
+| `TestMongoDBOIDCSilentConnect`, `TestMongoDBOIDCTokenChecks` | silent request, interactive continuation, `interactiveFallback: false`, `authParams`; opaque, wrong-issuer and wrong-audience tokens refused before MongoDB with precise reasons |
+| `TestExpectedWaitsAreNotSlow` | a change stream waiting for events is an expected wait (not slow); a long query is slow |
+| `TestPreflightAgainstDeployments` | topology, version, TLS verification, host name mismatch, replica set name mismatch; API requires an identity |
+| `TestCacheInvalidationAcrossReplicas`, `TestCacheManagement` | invalidation published by one replica, applied once by the other, results per replica; RBAC, confirmation, audit |
+| `TestRevalidateIdentities` | invalidating identities makes OpenShift sign-ins pick up group changes on the next request |
+| `TestPlaceholders*`, `TestMongoOIDCOptions` | `${NAME}`, defaults, typed values, escapes, unset variables named, values cannot inject YAML |
+| kind checks | restricted admission with UID 1000680000; `helm test` preflight; registry listing and revocation across replicas; durable audit and chain verification; cache invalidation on both replicas; NetworkPolicy allow and block; rolling restart, session end and reconnect |
+| Web | automatic connection once (and cancellable), no automatic connection after a failure, no build details on the sign-in page, Caches page confirmation |
 
-### MONGODB-OIDC tests (MongoDB Enterprise 7.0, test identity provider)
-
-| Test | Covers |
-| --- | --- |
-| `TestMongoDBOIDCEndToEnd` | authorization code flow with PKCE through the portal; the session is `MONGODB-OIDC` as `testidp/u-1001` on `$external`; MongoDB allows reads and refuses writes per that user's roles |
-| `TestMongoDBOIDCRefresh` | after the access token expires, reads keep working and a token refresh is observed, without a new sign-in |
-| `TestMongoDBOIDCRefusals` | an identity unknown to MongoDB is rejected by MongoDB; a client id different from what the server announces is refused before a token is sent; no session in either case |
-| `TestSCRAMAlongsideOIDC` | SCRAM users keep working on the same deployment |
-
-### Unit and API security tests (selection)
-
-Optional and required SSO; OpenShift OAuth flow against a fake OAuth server
-(discovery, PKCE, state, replay, open-redirect protection, token exchange,
-`users/~`); portal OIDC against a test provider (discovery, PKCE, state and
-nonce, issuer, audience, expiry and signature checks, group
-restriction, username claim, logout); sealed cookies (forgery, revalidation,
-revocation, staleness); identity headers from untrusted peers ignored; RBAC
-policy parsing, deny rules, namespace and profile globs, new resources and
-roles, default role only for unmapped users; CSRF (missing, forged, other
-user's token, cross origin, cross site); login lockout and `Retry-After`; SSRF
-attempt via profile; unknown JSON fields; cookie flags; session rotation and
-fixation; idle expiry; admin session listing and revocation; audit search,
-CSV export without formula injection, chain verification;
-export codecs (BOM, CSV quoting, types); restart requires re-authentication;
-security headers and CSP; body limits; operator injection; error
-classification; TLS configuration (no `InsecureSkipVerify`, CA required,
-client certificate reload); query validator; monitoring sections
-fail independently.
-
-### Container smoke test (production and debug, UIDs 1000680000, 123456, 65532, GID 0)
-
-Read-only root filesystem, all capabilities dropped, `no-new-privileges`:
-ready, built-in healthcheck, UI served with CSP, HTTPS listener with a verified
-certificate, sign-in options for anonymous users, MongoDB login sets a
-`__Host-` cookie with `HttpOnly; Secure; SameSite=Strict`, authenticated query,
-invalid password rejected, password absent from logs. The production image has
-no shell; neither image has a package manager; the debug image's `mongosh` runs
-as an arbitrary UID.
+The integration and unit tests from 0.0.2 (authentication, TLS, CRUD, shell,
+monitoring, failover, import/export, killOp, shared store) are unchanged and
+pass; see the 0.0.2 tables in the repository history.
 
 ## Security scans
 
 | Scanner | Scope | Result |
 | --- | --- | --- |
 | govulncheck | reachable Go vulnerabilities | **0 affecting**; 1 module-level advisory not reachable (below) |
-| gosec | Go source (excluding test fixtures) | **0 issues** after fixes (below) |
-| npm audit | web dependencies | **0 vulnerabilities** (after the updates below) |
+| gosec | Go source (excluding test fixtures) | **0 issues** |
+| npm audit | web dependencies | **0 vulnerabilities** |
 | gitleaks | repository | **no leaks** |
 | hadolint | Dockerfile | clean |
-| Trivy config | rendered manifests, HIGH and CRITICAL | clean |
-| Trivy image | production and debug | 0 Critical / High / Medium / Low; 1 Unknown (below) |
+| actionlint + shellcheck | CI workflow, new scripts | clean (one style note, SC2129, left as is) |
+| Trivy config | rendered manifests and chart, HIGH and CRITICAL | clean |
+| Trivy image | production and debug | raw: 1 Unknown (GO-2026-5932); with `security/vex` applied: no open findings, GO-2026-5932 shown as suppressed `not_affected` |
 | Grype | production and debug | no vulnerabilities |
 | Syft SBOM | production / debug | 46 / 118 packages |
 
 A clean scan means no **known** vulnerabilities were found by these tools at
 scan time; it is not proof that none exist.
 
-### Fixes made for this release
+### GO-2026-5932
 
-* npm: `@mongosh/browser-runtime-core` updated to 5.11.3; overrides pin the
-  transitive `body-parser` to 2.4.0 and `zod` to 4.6.x, which resolved the
-  high-severity advisories `npm audit` reported for those packages.
-* gosec G115 (integer conversion): the audit TTL is clamped to `MaxInt32`
-  seconds before conversion.
-* gosec G104 (unchecked error): the OpenShift probe's response body close is
-  handled explicitly.
-* gosec G304 / G703 (file path), G710 (redirect), G118 (goroutine context):
-  reviewed and annotated with the reason. The client secret path comes from
-  the operator's configuration, never from a request; the redirects go to the
-  configured identity provider's authorization endpoint from discovery; the
-  import job intentionally outlives the upload request and is cancelled
-  through the job or when the user's session ends.
+| Question | Finding |
+| --- | --- |
+| Affected module and packages | `golang.org/x/crypto`, packages `openpgp`, `openpgp/packet`, `armor`, `clearsign`, `errors`, `elgamal`, `s2k` (advisory: unmaintained and unsafe by design; reviewed by the Go team) |
+| Installed version | v0.58.0 (all versions affected; no fixed version exists) |
+| Dependency path | the MongoDB driver (`ocsp`) and `youmark/pkcs8` (`pbkdf2`, `scrypt`) require the module |
+| Linked into the binary | no: `go list -deps ./cmd/portal` contains only `x/crypto/pbkdf2`, `scrypt` and `ocsp`; govulncheck symbol analysis finds no use |
+| In the runtime image | the module appears in the binary's build information (which is why Trivy reports it), not the `openpgp` code |
+| Mitigation | none needed in code; CI fails if `openpgp` becomes a dependency; OpenVEX statement `security/vex/mongo-portal.openvex.json` (`not_affected`, `vulnerable_code_not_present`) |
+| Owner / review | repository maintainers; review by 2027-01-22 or when x/crypto changes |
 
-### Exceptions
+| Other exception | Component | Severity | Reason | Mitigation | Review |
+| --- | --- | --- | --- | --- | --- |
+| KSV-0125 | images from a public registry | Medium | policy finding, not a vulnerability | digests pinned; mirror to an approved registry where required | at production onboarding |
 
-| ID | Component | Severity | Exploitability | Why no remediation | Mitigation | Review |
-| --- | --- | --- | --- | --- | --- | --- |
-| GO-2026-5932 | `golang.org/x/crypto` (`openpgp` package) | Unknown (advisory: package unmaintained) | Not reachable: the portal never imports `x/crypto/openpgp` (govulncheck symbol analysis) | No fixed version exists; the module is required transitively by the MongoDB driver | Keep x/crypto current (Dependabot); the govulncheck gate in CI fails if it becomes reachable | 2027-01-22 |
-| KSV-0125 | Deployment images (docker.io) | Medium | Policy finding, not a vulnerability | Registry choice is site policy | Production pins digests; mirror to an approved registry if required | at production onboarding |
+## Problems found and fixed during this release
 
-## Published images
-
-Built from a clean `git archive` of commit `0517a8f` with BuildKit for
-linux/amd64 and linux/arm64, with SBOM and `mode=max` provenance attached. The
-tags did not exist before; `latest` is not used.
-
-| Image | Index digest | Verified |
-| --- | --- | --- |
-| `docker.io/mohankrishna999/mongo-portal:0.0.2` | `sha256:9f0fa1e290548e8a348202eb3725d11ef5085a775fe9ea0fa767fe565a08dc9d` | pulled image reports 0.0.2 (0517a8f, go1.27.3), source and revision labels match, runs as an arbitrary UID with a read-only root filesystem; smoke 74 / 74 and browser e2e PASS on the published image; Trivy by digest: 1 Unknown (GO-2026-5932, above) |
-| `docker.io/mohankrishna999/mongo-portal:0.0.2-debug` | `sha256:d1c69ebffa31ee5569bfd056d7fa74124a9a52f6e9433040d1841e4f16b15462` | smoke 74 / 74 (both images); Trivy by digest: 1 Unknown (same) |
-
-The prod overlay and `examples/openshift/deployment.yml` pin the production
-digest; dev uses `0.0.2-debug`, test `0.0.2`. The 0.0.1 images are unchanged.
+- With the documented store grant (readWrite), changing `audit.retention`
+  made the store unavailable (`collMod` not permitted). Fixed: the store
+  stays usable and the change is logged for the database administrator.
+- Slow-operation alerts counted awaitable `hello`, change streams, tailable
+  cursors and oplog tailing. Fixed: shown as expected waits.
+- Zero timestamps were rendered as "1/1/1". Fixed.
+- CI: two of three manifest guardrails could not fail the job. Fixed.
+- UI: sidebar icons were never rendered (icons passed to `NavItem` with
+  custom links). Fixed.
+- A unit test flaked under load (request timeout). Timeout raised; 20 / 20
+  repeated runs passed.
 
 ## Not environment-validated
 
-* The OpenShift OAuth login end to end against a real OAuth server (exercised
-  against faithful fakes of the discovery, token and `users/~` endpoints).
-* Portal OIDC with Microsoft Entra ID, Okta or Keycloak (exercised against a
-  standards-conformant test provider; provider-specific claims and group
-  overage need checking at onboarding, see `docs/oidc.md`).
-* MONGODB-OIDC against the production MongoDB Enterprise deployment and
-  identity provider; its OIDC configuration was not inspected or changed.
-* restricted-v2 SCC admission and UID-range assignment (emulated: arbitrary
-  UIDs, read-only root filesystem, dropped capabilities; script in
-  `test/container/restricted-k8s.sh`).
-* Route re-encrypt with the service CA, cookie affinity across replicas.
-* NetworkPolicy enforcement and the OTLP egress component (rendered and
-  schema-validated only).
-* HorizontalPodAutoscaler behaviour (rendered and schema-validated only).
-* ServiceMonitor scraping, log forwarding and export to an OpenTelemetry
-  collector.
-* Argo CD sync behaviour (manifests validated against the Argo CD CRD schemas).
-* Connectivity to an existing production MongoDB (never contacted).
+* OpenShift: OAuth login against a real OAuth server, SCC admission, Routes
+  with re-encrypt and cookie affinity, OVN-Kubernetes NetworkPolicy,
+  ServiceMonitor scraping (Kubernetes equivalents were tested on kind).
+* Identity providers: Microsoft Entra ID, Okta or Keycloak tenants;
+  OpenShift federated to the IdP that MongoDB trusts (the acceptance test in
+  [ORGANIZATION_CONFIGURATION.md](ORGANIZATION_CONFIGURATION.md)).
+* The target MongoDB Enterprise deployment and its OIDC configuration (never
+  inspected or changed).
+* CI on GitHub: the workflow was linted, not run; publishing needs the
+  repository variables and secrets listed in the workflow header.
+
+## Published images
+
+See the release commit that pins 0.0.3.

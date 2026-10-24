@@ -22,7 +22,10 @@ Sessions cannot move between replicas without sharing credentials, which
 the portal never does. The Route keeps each browser on one replica with a
 cookie (OpenShift default). When a replica stops, its users connect to
 MongoDB again; single sign-on is not affected (the SSO cookie is sealed with
-the shared session key).
+the shared session key). The login page says why ("Your MongoDB connection
+ended…") and keeps the selected profile; profiles with MONGODB-OIDC
+`autoConnect` reconnect without any prompt, and **Refresh & connection →
+Reconnect** starts a fresh MongoDB session on demand.
 
 With the **session registry** (`session.registry: true`, needs `store`),
 every replica publishes session metadata (user, MongoDB user, profile,

@@ -1,0 +1,195 @@
+# Organization-neutral defaults. Nothing here names a company, cluster,
+# registry account, MongoDB host or identity provider: set those per
+# environment (a values file per environment, or --set).
+
+# Container image. repository is required (the published image or your
+# mirror). Production should pin a digest; tag defaults to the appVersion.
+image:
+  repository: ""
+  tag: ""
+  digest: ""
+  # production (no shell) or debug (diagnostic tools: mongosh, curl, openssl)
+  variant: production
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# openshift: Route with re-encrypt TLS from the service CA, the service
+# account as OpenShift OAuth client, optional dedicated SCC.
+# kubernetes: Ingress (optional) and a TLS Secret you provide.
+platform: openshift
+
+replicaCount: 2
+
+# The portal configuration (docs/configuration.md), rendered into the
+# mongo-portal-config ConfigMap. Values may use ${NAME} or ${NAME:-default}
+# placeholders resolved from the container environment (env below), so one
+# configuration serves several environments. The chart fills in the
+# listener, TLS, session key, RBAC and transfer paths it mounts; anything set
+# here wins.
+config:
+  environment: production
+  server:
+    publicOrigin: "${PORTAL_PUBLIC_URL:-}"
+  identity:
+    openshift:
+      enabled: auto
+    requireSSO: false
+  session:
+    idleTimeout: 15m
+    absoluteTimeout: 8h
+  monitoring:
+    slowOperation: 5s
+  profiles:
+    - name: primary
+      displayName: "${MONGODB_PROFILE_NAME:-MongoDB}"
+      uri: "${MONGODB_URI}"
+      defaultAuthSource: admin
+      tls:
+        mode: "${MONGODB_TLS_MODE:-enabled}"
+        caFile: /etc/mongo-portal/mongodb-ca/ca.crt
+
+# Environment of the portal container: values for the configuration
+# placeholders (MONGODB_URI is required by the default configuration).
+env:
+  MONGODB_URI: ""
+  PORTAL_PUBLIC_URL: ""
+# Further variables, for example from Secrets or ConfigMaps.
+extraEnv: []
+envFrom: []
+
+# Portal RBAC policy ConfigMap (mongo-portal-rbac), re-read every 30s.
+rbacPolicy:
+  create: true
+  defaultRole: role:mongodb
+  # p and g lines (docs/rbac.md), for example:
+  #   g, <sre-group>, role:admin
+  #   g, <platform-team-group>, role:platform-admin
+  policy: ""
+
+# Names of Secrets and ConfigMaps the pods mount when they exist. None is
+# created by the chart: create them with your secret management.
+secrets:
+  # key session-key: >= 32 random bytes shared by all replicas (required
+  # for more than one replica)
+  session: mongo-portal-session
+  # OIDC client secrets referenced by clientSecretFile
+  oidc: mongo-portal-oidc
+  # username and password of the shared store account
+  store: mongo-portal-store
+  # tls.crt and tls.key for MongoDB mutual TLS
+  mongodbClient: mongo-portal-mongodb-client
+# ConfigMap with ca.crt, the CA of the MongoDB server certificates.
+mongodbCA:
+  configMap: mongo-portal-mongodb-ca
+
+# HTTPS serving certificate of the portal. On OpenShift the service CA
+# creates the Secret; on Kubernetes provide it (for example cert-manager).
+tls:
+  enabled: true
+  secretName: mongo-portal-tls
+  serviceCA: true
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+openshift:
+  # The service account is the OAuth client of the built-in OpenShift login.
+  oauthClient: true
+  # Admit pods only under this SCC (empty: the cluster's default selection).
+  # The SCC and its use binding are cluster resources (examples/kustomize/cluster).
+  requiredSCC: ""
+  sccRoleBinding:
+    create: false
+    clusterRole: mongo-portal-scc-use
+
+route:
+  enabled: true
+  host: ""
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tlsSecretName: ""
+
+service:
+  port: 443
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+goMemLimit: 450MiB
+
+transfer:
+  # emptyDir for import uploads (transfer.maxImportBytes x maxConcurrentJobs)
+  sizeLimit: 2Gi
+
+# Extra pod security context fields for platforms that do not assign a UID
+# (for example runAsUser and runAsGroup on plain Kubernetes). Leave empty on
+# OpenShift.
+podSecurityContext: {}
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpread: true
+terminationGracePeriodSeconds: 45
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+networkPolicy:
+  enabled: true
+  ingress:
+    # Namespaces allowed to reach the portal (the router or ingress
+    # controller) and to scrape metrics.
+    from:
+      - namespaceSelector:
+          matchLabels:
+            policy-group.network.openshift.io/ingress: ""
+    metricsFrom:
+      - namespaceSelector:
+          matchLabels:
+            network.openshift.io/policy-group: monitoring
+  egress:
+    dns:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: openshift-dns
+    dnsPorts: [53, 5353]
+    # MongoDB pods (or ipBlock rules) the portal may reach.
+    mongodb: []
+    #  - to:
+    #      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: <mongodb-namespace>}}
+    #        podSelector: {matchLabels: {app: <mongodb-label>}}
+    #    ports: [27017]
+    # API server and OAuth/OIDC providers (HTTPS)
+    httpsPorts: [443, 6443]
+    extra: []
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+# helm test runs the read-only preflight (mongo-portal preflight) with the
+# same configuration and mounts.
+tests:
+  preflight: true

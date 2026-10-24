@@ -1,0 +1,62 @@
+{{- if .Values.tests.preflight }}
+# helm test <release>: the read-only preflight with the portal's
+# configuration and mounts (DNS, network, TLS, MongoDB topology and version,
+# identity providers, MONGODB-OIDC provider, shared store). It changes
+# nothing and prints no secret values.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "mongo-portal.fullname" . }}-preflight
+  # Not the portal's selector labels: the Service, PDB and policies must not
+  # select this pod.
+  labels:
+    app.kubernetes.io/name: {{ include "mongo-portal.name" . }}-preflight
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: preflight
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation
+    {{- with .Values.openshift.requiredSCC }}
+    openshift.io/required-scc: {{ . }}
+    {{- end }}
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "mongo-portal.serviceAccountName" . }}
+  automountServiceAccountToken: {{ and (eq .Values.platform "openshift") .Values.openshift.oauthClient }}
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+    {{- with .Values.podSecurityContext }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: preflight
+      image: {{ include "mongo-portal.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      args: ["preflight", "--config=/etc/mongo-portal/config/config.yaml"]
+      env:
+        {{- include "mongo-portal.env" . | nindent 8 }}
+      {{- with .Values.envFrom }}
+      envFrom:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+      securityContext:
+        {{- include "mongo-portal.securityContext" . | nindent 8 }}
+      volumeMounts:
+        {{- include "mongo-portal.volumeMounts" . | nindent 8 }}
+  volumes:
+    {{- include "mongo-portal.volumes" . | nindent 4 }}
+{{- end }}

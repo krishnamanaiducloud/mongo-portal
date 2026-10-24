@@ -4,7 +4,10 @@ The portal records security-relevant events of its own users: sign-ins and
 failures, MongoDB logins (with the method: password or OIDC), sign-outs,
 session creation, expiry and revocation, authorization denials, every data
 change, queries and shell operations, imports and exports, operations ended
-with killOp, and audit exports. Events never contain passwords, tokens or
+with killOp, connection diagnostics (`profile_diagnostics`), cache
+invalidations (`cache_invalidate`, with scope and per-cache errors), and audit
+exports. MONGODB-OIDC failures carry a precise reason (for example
+`token_audience_mismatch` or `login_required`). Events never contain passwords, tokens or
 document contents.
 
 This is **portal** auditing. MongoDB Enterprise has its own database audit

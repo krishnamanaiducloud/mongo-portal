@@ -1,0 +1,70 @@
+# Example values for Kubernetes without OpenShift: Ingress with a TLS
+# Secret, OIDC sign-in at the corporate provider. Placeholders as in
+# values-openshift.yaml.
+image:
+  repository: ${PORTAL_IMAGE_REPOSITORY}
+  digest: ${PORTAL_IMAGE_DIGEST}
+platform: kubernetes
+replicaCount: 2
+
+tls:
+  enabled: true
+  secretName: mongo-portal-tls             # provided, for example, by cert-manager
+  serviceCA: false
+
+route:
+  enabled: false
+ingress:
+  enabled: true
+  className: ${INGRESS_CLASS}
+  host: ${PORTAL_HOST}
+  tlsSecretName: ${PORTAL_INGRESS_TLS_SECRET}
+  annotations:
+    # The portal serves HTTPS; keep each browser on one replica.
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/session-cookie-name: mongo_portal_affinity
+
+env:
+  MONGODB_URI: ""                          # unused: the profile below sets its URI
+
+config:
+  environment: production
+  server:
+    publicOrigin: https://${PORTAL_HOST}
+  identity:
+    requireSSO: true
+    oidc:
+      providers:
+        - name: corp
+          displayName: ${ORG_SSO_DISPLAY_NAME}
+          issuer: ${ORG_OIDC_ISSUER_URL}
+          clientID: ${PORTAL_OIDC_CLIENT_ID}
+          clientSecretFile: /etc/mongo-portal/oidc/client-secret
+          groupsClaim: groups
+  profiles:
+    - name: primary
+      displayName: ${MONGODB_PROFILE_DISPLAY_NAME}
+      uri: mongodb://${MONGODB_HOSTS}/
+      replicaSet: ${MONGODB_REPLICA_SET}
+      tls:
+        mode: enabled
+        caFile: /etc/mongo-portal/mongodb-ca/ca.crt
+
+networkPolicy:
+  ingress:
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ${INGRESS_NAMESPACE}
+    metricsFrom: []
+  egress:
+    dns:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+    mongodb:
+      - to:
+          - ipBlock:
+              cidr: ${MONGODB_CIDR}
+        ports: [27017]

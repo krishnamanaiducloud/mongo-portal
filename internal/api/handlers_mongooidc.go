@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -105,7 +107,8 @@ func (s *Server) handleMongoOIDCStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := oauthState{State: session.NewToken(), Verifier: session.NewToken() + session.NewToken(), Nonce: session.NewToken(),
-		Return: safeReturn(r.URL.Query().Get("return")), Redirect: s.callbackURL(r, mongoOIDCCallback), Profile: p.Name}
+		Return: safeReturn(r.URL.Query().Get("return")), Redirect: s.callbackURL(r, mongoOIDCCallback), Profile: p.Name,
+		Silent: r.URL.Query().Get("silent") == "1" && rc.p.SSO()}
 	oc, err := mongoOAuth(p, idp, st.Redirect)
 	if err != nil {
 		mongoLoginRedirect(w, r, name, "idp_unavailable")
@@ -115,9 +118,24 @@ func (s *Server) handleMongoOIDCStart(w http.ResponseWriter, r *http.Request) {
 		mongoLoginRedirect(w, r, name, "failed")
 		return
 	}
+	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(st.Verifier), oidc.Nonce(st.Nonce)}
+	keys := slices.Sorted(maps.Keys(p.OIDC.AuthParams))
+	for _, k := range keys {
+		opts = append(opts, oauth2.SetAuthURLParam(k, p.OIDC.AuthParams[k]))
+	}
+	if st.Silent {
+		// No login page: the provider answers from its existing browser
+		// session (for example the one OpenShift sign-in created) or with
+		// login_required (OpenID Connect Core 3.1.2.1).
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "none"))
+	}
 	// The target is the configured provider's authorization endpoint.
-	http.Redirect(w, r, oc.AuthCodeURL(st.State, oauth2.S256ChallengeOption(st.Verifier), oidc.Nonce(st.Nonce)), http.StatusFound) // #nosec G710 -- endpoint from configured discovery
+	http.Redirect(w, r, oc.AuthCodeURL(st.State, opts...), http.StatusFound) // #nosec G710 -- endpoint from configured discovery
 }
+
+// interactionErrors are the provider's answers to prompt=none when it
+// needs the user (OpenID Connect Core 3.1.2.6).
+var interactionErrors = []string{"login_required", "interaction_required", "consent_required", "account_selection_required"}
 
 func (s *Server) handleMongoOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	rc := from(r)
@@ -151,6 +169,17 @@ func (s *Server) handleMongoOIDCCallback(w http.ResponseWriter, r *http.Request)
 	}
 	q := r.URL.Query()
 	if e := q.Get("error"); e != "" {
+		if st.Silent && slices.Contains(interactionErrors, e) {
+			if p.OIDC.Interactive() {
+				// The provider needs the user: continue with its sign-in page.
+				// This never falls back to a password.
+				s.Metrics.AuthAttempts.WithLabelValues("mongodb-oidc", "interaction_required").Inc()
+				http.Redirect(w, r, mongoOIDCPrefix+p.Name+"/start?return="+url.QueryEscape(st.Return), http.StatusFound)
+				return
+			}
+			fail("login_required", "automatic connection needs a sign-in at the identity provider ("+truncate(e, 64)+")")
+			return
+		}
 		reason := "failed"
 		if e == "access_denied" {
 			reason = "denied"
@@ -188,6 +217,10 @@ func (s *Server) handleMongoOIDCCallback(w http.ResponseWriter, r *http.Request)
 			fail("failed", "ID token verification failed")
 			return
 		}
+	}
+	if prob := mongoconn.CheckAccessToken(tok.AccessToken, p.OIDC.Issuer, p.OIDC.Audience); prob != nil {
+		fail(prob.Code, prob.Detail)
+		return
 	}
 	tokens := mongoconn.NewOIDCTokens(p.OIDC.Issuer, p.OIDC.ClientID, oc, idp.client, tok)
 	cred := mongoconn.Credentials{Mechanism: config.MechanismOIDC, OIDC: tokens}
