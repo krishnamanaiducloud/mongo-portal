@@ -1,4 +1,4 @@
-VERSION ?= 0.0.1
+VERSION ?= 0.0.2
 COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 IMAGE   ?= docker.io/mohankrishna999/mongo-portal
 PLATFORMS ?= linux/amd64,linux/arm64

@@ -112,7 +112,7 @@ func (f *fakeOpenShift) config(enabled string) config.OpenShiftConfig {
 	return config.OpenShiftConfig{
 		Enabled: enabled, APIURL: f.srv.URL, CAFile: f.caFile, ServiceAccountFile: f.tokenFile,
 		Scopes: []string{"user:info"}, ProbeInterval: time.Minute, RevalidateInterval: 5 * time.Minute,
-		MaxStale: time.Hour, RequestTimeout: 3 * time.Second,
+		MaxStale: time.Hour, RequestTimeout: 10 * time.Second, // generous: the race detector on a busy machine
 	}
 }
 
