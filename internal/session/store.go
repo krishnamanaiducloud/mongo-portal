@@ -44,14 +44,19 @@ type Session struct {
 	MongoUser  string
 	AuthSource string
 	Mechanism  string
-	TLS        bool
-	Client     *mongo.Client
-	Status     *mongoconn.ConnectionStatus
+	// OIDC holds the user's MONGODB-OIDC tokens (memory only).
+	OIDC   *mongoconn.OIDCTokens
+	TLS    bool
+	Client *mongo.Client
+	Status *mongoconn.ConnectionStatus
 	// Pool counts this session's MongoDB connections (monitoring page).
 	Pool      *mongoconn.PoolStats
 	CreatedAt time.Time
 	ExpiresAt time.Time
 	UserAgent string
+	ClientIP  string
+	// Pod is the replica serving this session (session registry).
+	Pod string
 
 	mu       sync.Mutex
 	lastSeen time.Time
@@ -295,6 +300,22 @@ func (st *Store) Get(secret, owner string) (*Session, error) {
 	return sess, nil
 }
 
+// Peek returns the live session for secret owned by owner without
+// recording activity (status and identity endpoints must not keep an idle
+// session alive).
+func (st *Store) Peek(secret, owner string) *Session {
+	if secret == "" {
+		return nil
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	sess, ok := st.sessions[keyOf(secret)]
+	if !ok || sess.Owner != owner || st.expired(sess, st.now()) {
+		return nil
+	}
+	return sess
+}
+
 // OwnerOf returns the owner key and principal of the live session for
 // secret, or "" when there is none. It records no activity; callers then
 // use Get with the owner they expect.
@@ -343,6 +364,55 @@ func (st *Store) DeleteByHandle(owner, handle, reason string) bool {
 		st.closeAll([]*Session{found}, reason)
 	}
 	return found != nil
+}
+
+// DeleteHandle removes a session of any owner by its public handle
+// (administrative revocation).
+func (st *Store) DeleteHandle(handle, reason string) bool {
+	st.mu.Lock()
+	var found *Session
+	for k, s := range st.sessions {
+		if s.Handle == handle {
+			found = s
+			delete(st.sessions, k)
+			break
+		}
+	}
+	st.mu.Unlock()
+	if found != nil {
+		st.closeAll([]*Session{found}, reason)
+	}
+	return found != nil
+}
+
+// DeleteOwner removes every session of a principal and returns how many.
+func (st *Store) DeleteOwner(owner, reason string) int {
+	st.mu.Lock()
+	var dead []*Session
+	for k, s := range st.sessions {
+		if s.Owner == owner {
+			dead = append(dead, s)
+			delete(st.sessions, k)
+		}
+	}
+	st.mu.Unlock()
+	st.closeAll(dead, reason)
+	return len(dead)
+}
+
+// All returns every live session of this replica, newest first.
+func (st *Store) All() []*Session {
+	now := st.now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	out := make([]*Session, 0, len(st.sessions))
+	for _, s := range st.sessions {
+		if !st.expired(s, now) {
+			out = append(out, s)
+		}
+	}
+	slices.SortFunc(out, func(a, b *Session) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	return out
 }
 
 // ListByOwner returns the live sessions of a principal.

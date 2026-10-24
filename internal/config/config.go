@@ -60,7 +60,12 @@ type Config struct {
 	Audit       AuditConfig      `yaml:"audit"`
 	Shell       ShellConfig      `yaml:"shell"`
 	Monitoring  MonitoringConfig `yaml:"monitoring"`
-	Profiles    []Profile        `yaml:"profiles"`
+	Transfer    TransferConfig   `yaml:"transfer"`
+	Telemetry   TelemetryConfig  `yaml:"telemetry"`
+	// Store is optional shared state (audit trail, session registry) kept
+	// in a MongoDB database with a dedicated least-privilege account.
+	Store    StoreConfig `yaml:"store"`
+	Profiles []Profile   `yaml:"profiles"`
 }
 
 type ServerConfig struct {
@@ -110,8 +115,51 @@ type IdentityConfig struct {
 	// the identity provider.
 	SSOLogoutURL string          `yaml:"ssoLogoutURL"`
 	OpenShift    OpenShiftConfig `yaml:"openshift"`
+	OIDC         OIDCConfig      `yaml:"oidc"`
 	Header       HeaderConfig    `yaml:"header"`
 	Dev          DevConfig       `yaml:"dev"`
+}
+
+// OIDCConfig lists OpenID Connect identity providers for portal sign-in
+// (Microsoft Entra ID, Okta, Keycloak, corporate providers, or a broker in
+// front of SAML or LDAP directories).
+type OIDCConfig struct {
+	Providers []OIDCProvider `yaml:"providers"`
+}
+
+// OIDCProvider is one OpenID Connect provider for portal sign-in.
+type OIDCProvider struct {
+	// Name is a DNS-label style identifier used in URLs and RBAC subjects.
+	Name        string `yaml:"name"`
+	DisplayName string `yaml:"displayName"`
+	// Enabled is "auto" (default: offered while discovery succeeds), "true"
+	// (also logs unavailability as a warning) or "false".
+	Enabled string `yaml:"enabled"`
+	// Issuer must exactly match the issuer in the provider's discovery
+	// document and in its ID tokens.
+	Issuer   string `yaml:"issuer"`
+	ClientID string `yaml:"clientID"`
+	// ClientSecretFile holds the client secret (confidential clients). Omit
+	// it for public clients; PKCE is always used.
+	ClientSecretFile string   `yaml:"clientSecretFile"`
+	Scopes           []string `yaml:"scopes"`
+	// UsernameClaim names the claim used as the portal user name (default
+	// preferred_username, then email, then sub).
+	UsernameClaim string `yaml:"usernameClaim"`
+	// GroupsClaim names the claim with group or role names (default groups).
+	GroupsClaim string `yaml:"groupsClaim"`
+	// RequiredGroups, if set, only admits users in at least one of them.
+	RequiredGroups []string `yaml:"requiredGroups"`
+	// CAFile and ExtraCAFiles add trusted CAs to the system roots.
+	CAFile       string   `yaml:"caFile"`
+	ExtraCAFiles []string `yaml:"extraCAFiles"`
+	// SessionMaxAge caps the portal sign-in (default session.absoluteTimeout).
+	SessionMaxAge  time.Duration `yaml:"sessionMaxAge"`
+	ProbeInterval  time.Duration `yaml:"probeInterval"`
+	RequestTimeout time.Duration `yaml:"requestTimeout"`
+	// LogoutRedirect sends users to the provider's end_session_endpoint on
+	// sign-out when the provider advertises one.
+	LogoutRedirect bool `yaml:"logoutRedirect"`
 }
 
 // OpenShiftConfig configures the built-in OpenShift OAuth login: the portal's
@@ -176,10 +224,76 @@ type RBACConfig struct {
 }
 
 // MonitoringConfig controls background health checks of the connection
-// profiles (unauthenticated "hello"/"ping"; no credentials are used).
+// profiles (unauthenticated "hello"/"ping"; no credentials are used) and the
+// thresholds of the monitoring page.
 type MonitoringConfig struct {
 	// ProfileHealthInterval defaults to 30s; a negative value disables it.
 	ProfileHealthInterval time.Duration `yaml:"profileHealthInterval"`
+	// SlowOperation marks running operations at least this old (default 5s).
+	SlowOperation time.Duration `yaml:"slowOperation"`
+	Thresholds    Thresholds    `yaml:"thresholds"`
+}
+
+// Thresholds turn monitoring values into warnings and critical alerts.
+type Thresholds struct {
+	ReplicationLagWarning   time.Duration `yaml:"replicationLagWarning" json:"replicationLagWarningSeconds"`
+	ReplicationLagCritical  time.Duration `yaml:"replicationLagCritical" json:"replicationLagCriticalSeconds"`
+	ConnectionsWarnPercent  float64       `yaml:"connectionsWarnPercent" json:"connectionsWarnPercent"`
+	CacheUsedWarnPercent    float64       `yaml:"cacheUsedWarnPercent" json:"cacheUsedWarnPercent"`
+	CacheDirtyWarnPercent   float64       `yaml:"cacheDirtyWarnPercent" json:"cacheDirtyWarnPercent"`
+	OplogWindowWarning      time.Duration `yaml:"oplogWindowWarning" json:"oplogWindowWarningSeconds"`
+	QueueWarn               float64       `yaml:"queueWarn" json:"queueWarn"`
+	AuthFailuresWarnPerPoll float64       `yaml:"authFailuresWarnPerPoll" json:"authFailuresWarnPerPoll"`
+}
+
+// TransferConfig controls import and export.
+type TransferConfig struct {
+	// Enabled turns import/export on (default true).
+	Enabled *bool `yaml:"enabled"`
+	// TempDir buffers uploads (an emptyDir in Kubernetes, default /tmp).
+	TempDir string `yaml:"tempDir"`
+	// MaxImportBytes caps one uploaded file (default 256 MiB).
+	MaxImportBytes int64 `yaml:"maxImportBytes"`
+	// MaxExportDocuments caps one export (default 10,000,000).
+	MaxExportDocuments int64 `yaml:"maxExportDocuments"`
+	// BatchSize is the number of documents per insert (default 500).
+	BatchSize int `yaml:"batchSize"`
+	// MaxConcurrentJobs per replica (default 2) and per user (1).
+	MaxConcurrentJobs int `yaml:"maxConcurrentJobs"`
+	// JobRetention keeps finished job reports (default 1h).
+	JobRetention time.Duration `yaml:"jobRetention"`
+	// MaxErrors stops an import after this many rejected documents (1000).
+	MaxErrors int `yaml:"maxErrors"`
+}
+
+// TransferEnabled reports whether import and export are enabled.
+func (c *Config) TransferEnabled() bool { return c.Transfer.Enabled == nil || *c.Transfer.Enabled }
+
+// TelemetryConfig configures OpenTelemetry. The standard OTEL_* environment
+// variables are honoured when no endpoint is configured here.
+type TelemetryConfig struct {
+	Tracing TracingConfig `yaml:"tracing"`
+}
+
+type TracingConfig struct {
+	// Enabled is "auto" (default: on when an endpoint is configured here or
+	// in OTEL_EXPORTER_OTLP_ENDPOINT), "true" or "false".
+	Enabled string `yaml:"enabled"`
+	// Protocol is "http/protobuf" (default) or "grpc".
+	Protocol string `yaml:"protocol"`
+	// Endpoint is the collector URL (https://collector:4318 or
+	// https://collector:4317 for gRPC).
+	Endpoint string `yaml:"endpoint"`
+	// Insecure sends spans without TLS (only for an in-cluster collector).
+	Insecure bool   `yaml:"insecure"`
+	CAFile   string `yaml:"caFile"`
+	// HeadersFile holds "key=value" lines (for example an API key).
+	HeadersFile string `yaml:"headersFile"`
+	// SampleRatio of new traces (0..1, default 1); parent decisions are kept.
+	SampleRatio *float64 `yaml:"sampleRatio"`
+	// ResourceAttributes are added to every span (service.namespace, ...).
+	ResourceAttributes map[string]string `yaml:"resourceAttributes"`
+	ServiceName        string            `yaml:"serviceName"`
 }
 
 type SessionConfig struct {
@@ -189,6 +303,11 @@ type SessionConfig struct {
 	AbsoluteTimeout time.Duration `yaml:"absoluteTimeout"`
 	MaxPerUser      int           `yaml:"maxPerUser"`
 	MaxTotal        int           `yaml:"maxTotal"`
+	// Registry publishes session metadata (never credentials) to the shared
+	// store, so administrators see and revoke sessions of every replica.
+	Registry bool `yaml:"registry"`
+	// RegistrySyncInterval is how often replicas sync the registry.
+	RegistrySyncInterval time.Duration `yaml:"registrySyncInterval"`
 	// KeyFile holds the HMAC key (>= 32 bytes) used for pre-login CSRF
 	// tokens. It must be identical on all replicas. If unset, a random key is
 	// generated at startup (acceptable for a single replica only).
@@ -225,6 +344,33 @@ type LoginConfig struct {
 
 type AuditConfig struct {
 	BufferSize int `yaml:"bufferSize"`
+	// Persist writes every event to the shared store (store.enabled) in
+	// addition to the structured log stream.
+	Persist bool `yaml:"persist"`
+	// Retention expires stored events after this duration (TTL index);
+	// 0 keeps them until removed by the database administrator.
+	Retention time.Duration `yaml:"retention"`
+	// Collection in the store database (default audit_events).
+	Collection string `yaml:"collection"`
+}
+
+// StoreConfig is optional shared state kept in MongoDB by the portal itself.
+// It uses a dedicated account that should have readWrite on Database only;
+// it is never used for user operations.
+type StoreConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Profile names the connection profile (hosts and TLS) of the store.
+	Profile  string `yaml:"profile"`
+	Database string `yaml:"database"`
+	// Mechanism is SCRAM-SHA-256 (default), SCRAM-SHA-1 or MONGODB-X509
+	// (with the profile's client certificate).
+	Mechanism    string `yaml:"mechanism"`
+	AuthSource   string `yaml:"authSource"`
+	UsernameFile string `yaml:"usernameFile"`
+	PasswordFile string `yaml:"passwordFile"`
+	// Required stops the portal when the store cannot be reached at
+	// startup; by default the portal starts and keeps retrying.
+	Required bool `yaml:"required"`
 }
 
 // ShellConfig controls the in-browser mongosh shell.
@@ -266,10 +412,33 @@ type Profile struct {
 	MaxPoolSize            uint64        `yaml:"maxPoolSize"`
 	MaxConnIdleTime        time.Duration `yaml:"maxConnIdleTime"`
 	TLS                    TLSConfig     `yaml:"tls"`
+	// OIDC enables MONGODB-OIDC for this profile: the portal signs the user
+	// in at the identity provider configured on the MongoDB deployment and
+	// hands the user's own access token to MongoDB.
+	OIDC *MongoOIDCConfig `yaml:"oidc"`
 	// PlaintextApproved records an explicit security exception for non-TLS
 	// connections. Required when Environment is production.
 	PlaintextApproved    bool   `yaml:"plaintextApproved"`
 	SecurityExceptionRef string `yaml:"securityExceptionRef"`
+}
+
+// MongoOIDCConfig describes the identity provider MongoDB trusts
+// (oidcIdentityProviders on the server). Issuer and ClientID must match the
+// server configuration; the portal checks them against what the server
+// reports during authentication.
+type MongoOIDCConfig struct {
+	Issuer           string   `yaml:"issuer"`
+	ClientID         string   `yaml:"clientID"`
+	ClientSecretFile string   `yaml:"clientSecretFile"`
+	Scopes           []string `yaml:"scopes"`
+	CAFile           string   `yaml:"caFile"`
+	ExtraCAFiles     []string `yaml:"extraCAFiles"`
+	// AllowedHosts lists the MongoDB host names the token may be sent to
+	// (default: the hosts of the profile URI).
+	AllowedHosts   []string      `yaml:"allowedHosts"`
+	RequestTimeout time.Duration `yaml:"requestTimeout"`
+	// DisplayName labels the sign-in button (default: the issuer host).
+	DisplayName string `yaml:"displayName"`
 }
 
 type TLSConfig struct {
@@ -291,10 +460,20 @@ var (
 	profileNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	headerNameRe  = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 	authSourceRe  = regexp.MustCompile(`^[^/\\. "$*<>:|?\x00]{1,64}$`)
+	claimRe       = regexp.MustCompile(`^[A-Za-z0-9_:/.\-]{1,128}$`)
+	dbNameRe      = regexp.MustCompile(`^[A-Za-z0-9_-]{1,63}$`)
+	collNameRe    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}$`)
 )
 
 // SupportedMechanisms lists MongoDB auth mechanisms usable with a password.
 var SupportedMechanisms = []string{"SCRAM-SHA-256", "SCRAM-SHA-1"}
+
+// MechanismOIDC is MongoDB's OpenID Connect mechanism (Enterprise).
+const MechanismOIDC = "MONGODB-OIDC"
+
+// MechanismX509 authenticates with the profile's client certificate; it is
+// accepted for the shared store connection only.
+const MechanismX509 = "MONGODB-X509"
 
 // forbiddenURIOptions may not appear in a profile URI. Credentials, auth and
 // TLS behaviour are controlled exclusively by structured configuration so
@@ -390,6 +569,22 @@ func (c *Config) applyDefaults() {
 	setDuration(&o.RevalidateInterval, 5*time.Minute)
 	setDuration(&o.MaxStale, time.Hour)
 	setDuration(&o.RequestTimeout, 5*time.Second)
+	for i := range id.OIDC.Providers {
+		op := &id.OIDC.Providers[i]
+		setDefault(&op.DisplayName, op.Name)
+		setDefault(&op.Enabled, EnabledAuto)
+		op.Enabled = strings.ToLower(op.Enabled)
+		if !slices.Contains(op.Scopes, "openid") {
+			op.Scopes = append([]string{"openid"}, op.Scopes...)
+		}
+		if len(op.Scopes) == 1 {
+			op.Scopes = append(op.Scopes, "profile", "email")
+		}
+		setDefault(&op.UsernameClaim, "preferred_username")
+		setDefault(&op.GroupsClaim, "groups")
+		setDuration(&op.ProbeInterval, time.Minute)
+		setDuration(&op.RequestTimeout, 10*time.Second)
+	}
 	setDefault(&id.Header.UserHeader, "X-Forwarded-User")
 	setDefault(&id.Header.GroupsHeader, "X-Forwarded-Groups")
 
@@ -401,6 +596,38 @@ func (c *Config) applyDefaults() {
 	setDefault(&rb.PolicyDir, "/etc/mongo-portal/rbac")
 	setDuration(&rb.ReloadInterval, 30*time.Second)
 	setDuration(&c.Monitoring.ProfileHealthInterval, 30*time.Second)
+	mo := &c.Monitoring
+	setDuration(&mo.SlowOperation, 5*time.Second)
+	th := &mo.Thresholds
+	setDuration(&th.ReplicationLagWarning, 10*time.Second)
+	setDuration(&th.ReplicationLagCritical, 60*time.Second)
+	setFloat(&th.ConnectionsWarnPercent, 80)
+	setFloat(&th.CacheUsedWarnPercent, 95)
+	setFloat(&th.CacheDirtyWarnPercent, 5)
+	setDuration(&th.OplogWindowWarning, 24*time.Hour)
+	setFloat(&th.QueueWarn, 10)
+	setFloat(&th.AuthFailuresWarnPerPoll, 5)
+
+	tr := &c.Transfer
+	setDefault(&tr.TempDir, os.TempDir())
+	setInt64(&tr.MaxImportBytes, 256<<20)
+	setInt64(&tr.MaxExportDocuments, 10_000_000)
+	setInt(&tr.BatchSize, 500)
+	setInt(&tr.MaxConcurrentJobs, 2)
+	setDuration(&tr.JobRetention, time.Hour)
+	setInt(&tr.MaxErrors, 1000)
+
+	tc := &c.Telemetry.Tracing
+	setDefault(&tc.Enabled, EnabledAuto)
+	tc.Enabled = strings.ToLower(tc.Enabled)
+	setDefault(&tc.Protocol, "http/protobuf")
+	setDefault(&tc.ServiceName, "mongo-portal")
+
+	st := &c.Store
+	setDefault(&st.Database, "mongo_portal")
+	setDefault(&st.Mechanism, "SCRAM-SHA-256")
+	setDefault(&st.AuthSource, "admin")
+	setDefault(&c.Audit.Collection, "audit_events")
 	if c.Query.AllowWriteStagesForSRE {
 		c.Query.AllowWriteStages = true
 	}
@@ -415,6 +642,7 @@ func (c *Config) applyDefaults() {
 	setDuration(&ss.AbsoluteTimeout, 8*time.Hour)
 	setInt(&ss.MaxPerUser, 3)
 	setInt(&ss.MaxTotal, 200)
+	setDuration(&ss.RegistrySyncInterval, 10*time.Second)
 
 	q := &c.Query
 	setInt64(&q.DefaultLimit, 20)
@@ -460,7 +688,42 @@ func (c *Config) applyDefaults() {
 		}
 		setDuration(&p.MaxConnIdleTime, 5*time.Minute)
 		setDefault(&p.TLS.MinVersion, "1.2")
+		if o := p.OIDC; o != nil {
+			if !slices.Contains(o.Scopes, "openid") {
+				o.Scopes = append([]string{"openid"}, o.Scopes...)
+			}
+			setDuration(&o.RequestTimeout, 10*time.Second)
+			if o.DisplayName == "" {
+				if u, err := url.Parse(o.Issuer); err == nil {
+					o.DisplayName = u.Host
+				}
+			}
+			if len(o.AllowedHosts) == 0 {
+				o.AllowedHosts = ProfileHosts(p.URI)
+			}
+		}
 	}
+}
+
+// ProfileHosts returns the host names (without ports) of a profile URI.
+func ProfileHosts(uri string) []string {
+	rest := strings.TrimPrefix(strings.TrimPrefix(uri, "mongodb+srv://"), "mongodb://")
+	authority, _, _ := strings.Cut(rest, "?")
+	hosts, _, _ := strings.Cut(authority, "/")
+	var out []string
+	for _, h := range strings.Split(hosts, ",") {
+		if h == "" {
+			continue
+		}
+		if host, _, err := net.SplitHostPort(h); err == nil {
+			h = host
+		}
+		h = strings.Trim(h, "[]")
+		if !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // IsProduction reports whether strict production checks apply.
@@ -527,8 +790,43 @@ func (c *Config) Validate() error {
 	if id.Dev.Enabled && id.Header.Enabled {
 		add("identity.dev and identity.header cannot both be enabled")
 	}
-	if id.RequireSSO && !id.Dev.Enabled && !id.Header.Enabled && id.OpenShift.Enabled == EnabledFalse {
-		add("identity.requireSSO needs an SSO source (openshift, header or dev)")
+	oidcOn := false
+	names := map[string]bool{}
+	for i, op := range id.OIDC.Providers {
+		where := fmt.Sprintf("identity.oidc.providers[%d]", i)
+		if !profileNameRe.MatchString(op.Name) {
+			add("%s.name %q must be a DNS-label style name", where, op.Name)
+		}
+		if names[op.Name] {
+			add("%s.name %q is duplicated", where, op.Name)
+		}
+		names[op.Name] = true
+		switch op.Enabled {
+		case EnabledAuto, EnabledTrue:
+			oidcOn = true
+		case EnabledFalse:
+		default:
+			add("%s.enabled must be auto, true or false", where)
+		}
+		if u, err := url.Parse(op.Issuer); err != nil || u.Scheme != "https" || u.Host == "" {
+			add("%s.issuer must be an https URL", where)
+		}
+		if op.ClientID == "" {
+			add("%s.clientID is required", where)
+		}
+		for _, s := range op.Scopes {
+			if s == "" || strings.ContainsAny(s, " \t\r\n") {
+				add("%s.scopes contains an invalid scope %q", where, s)
+			}
+		}
+		for _, cl := range []string{op.UsernameClaim, op.GroupsClaim} {
+			if !claimRe.MatchString(cl) {
+				add("%s: claim name %q is invalid", where, cl)
+			}
+		}
+	}
+	if id.RequireSSO && !id.Dev.Enabled && !id.Header.Enabled && id.OpenShift.Enabled == EnabledFalse && !oidcOn {
+		add("identity.requireSSO needs an SSO source (openshift, oidc, header or dev)")
 	}
 	for _, cidr := range id.TrustedProxyCIDRs {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
@@ -576,8 +874,31 @@ func (c *Config) Validate() error {
 			add("profiles[%s].defaultAuthSource is invalid", p.Name)
 		}
 		for _, m := range p.AuthMechanisms {
-			if !slices.Contains(SupportedMechanisms, m) {
+			switch {
+			case slices.Contains(SupportedMechanisms, m):
+			case m == MechanismOIDC:
+				if p.OIDC == nil {
+					add("profiles[%s]: %s needs an oidc block (issuer and clientID of the MongoDB identity provider)", p.Name, m)
+				}
+			default:
 				add("profiles[%s].authMechanisms: %q is not supported", p.Name, m)
+			}
+		}
+		if o := p.OIDC; o != nil {
+			if !slices.Contains(p.AuthMechanisms, MechanismOIDC) {
+				add("profiles[%s]: oidc is configured but %s is not in authMechanisms", p.Name, MechanismOIDC)
+			}
+			if u, err := url.Parse(o.Issuer); err != nil || u.Scheme != "https" || u.Host == "" {
+				add("profiles[%s].oidc.issuer must be an https URL", p.Name)
+			}
+			if o.ClientID == "" {
+				add("profiles[%s].oidc.clientID is required", p.Name)
+			}
+			if len(o.AllowedHosts) == 0 {
+				add("profiles[%s].oidc.allowedHosts is empty", p.Name)
+			}
+			if p.TLS.Mode != TLSEnabled && c.IsProduction() {
+				add("profiles[%s]: MONGODB-OIDC sends bearer tokens and requires tls.mode=enabled in production", p.Name)
 			}
 		}
 		switch strings.ToLower(p.ReadPreference) {
@@ -591,6 +912,53 @@ func (c *Config) Validate() error {
 		if p.TLS.Mode == TLSDisabled && c.IsProduction() && !p.PlaintextApproved {
 			add("profiles[%s]: tls.mode=disabled in production requires plaintextApproved=true (security exception)", p.Name)
 		}
+	}
+	st := c.Store
+	if st.Enabled {
+		sp, ok := c.Profile(st.Profile)
+		switch {
+		case !ok:
+			add("store.profile %q is not a configured profile", st.Profile)
+		case st.Mechanism == MechanismX509 && sp.TLS.ClientCertFile == "":
+			add("store.mechanism MONGODB-X509 needs a client certificate on profile %q", st.Profile)
+		}
+		if st.Mechanism != MechanismX509 && !slices.Contains(SupportedMechanisms, st.Mechanism) {
+			add("store.mechanism %q is not supported", st.Mechanism)
+		}
+		if st.Mechanism != MechanismX509 && (st.UsernameFile == "" || st.PasswordFile == "") {
+			add("store.usernameFile and store.passwordFile are required for %s", st.Mechanism)
+		}
+		if !dbNameRe.MatchString(st.Database) || !collNameRe.MatchString(c.Audit.Collection) {
+			add("store.database or audit.collection is invalid")
+		}
+	}
+	if c.Audit.Persist && !st.Enabled {
+		add("audit.persist requires store.enabled")
+	}
+	if c.Session.Registry && !st.Enabled {
+		add("session.registry requires store.enabled")
+	}
+	tc := c.Telemetry.Tracing
+	switch tc.Enabled {
+	case EnabledAuto, EnabledTrue, EnabledFalse:
+	default:
+		add("telemetry.tracing.enabled must be auto, true or false")
+	}
+	if tc.Protocol != "http/protobuf" && tc.Protocol != "grpc" {
+		add("telemetry.tracing.protocol must be http/protobuf or grpc")
+	}
+	if tc.Endpoint != "" {
+		if u, err := url.Parse(tc.Endpoint); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			add("telemetry.tracing.endpoint must be an http(s) URL")
+		} else if u.Scheme == "http" && !tc.Insecure {
+			add("telemetry.tracing.endpoint uses http: set insecure: true explicitly or use https")
+		}
+	}
+	if r := tc.SampleRatio; r != nil && (*r < 0 || *r > 1) {
+		add("telemetry.tracing.sampleRatio must be between 0 and 1")
+	}
+	if c.Transfer.BatchSize > 10000 || c.Transfer.MaxConcurrentJobs > 32 {
+		add("transfer.batchSize must be <= 10000 and maxConcurrentJobs <= 32")
 	}
 	return errors.Join(errs...)
 }
@@ -693,6 +1061,12 @@ func setDuration(p *time.Duration, v time.Duration) {
 }
 
 func setInt(p *int, v int) {
+	if *p == 0 {
+		*p = v
+	}
+}
+
+func setFloat(p *float64, v float64) {
 	if *p == 0 {
 		*p = v
 	}

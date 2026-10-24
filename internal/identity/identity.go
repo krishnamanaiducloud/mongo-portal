@@ -4,6 +4,8 @@
 //
 //   - OpenShift: the portal's built-in OAuth login; the signed-in user is
 //     carried in an encrypted cookie.
+//   - OIDC: OpenID Connect providers (Entra ID, Okta, Keycloak, ...), also
+//     carried in the encrypted cookie.
 //   - Header: a trusted authenticating reverse proxy sets user and group
 //     headers (for example oauth2-proxy).
 //   - Dev: a fixed identity for local development behind an explicit gate.
@@ -30,6 +32,7 @@ type Source string
 
 const (
 	SourceOpenShift Source = "openshift"
+	SourceOIDC      Source = "oidc"
 	SourceHeader    Source = "header"
 	SourceDev       Source = "dev"
 	SourceMongoDB   Source = "mongodb"
@@ -40,6 +43,8 @@ type Principal struct {
 	User   string   `json:"user"`
 	Groups []string `json:"groups"`
 	Source Source   `json:"source"`
+	// Provider is the OIDC provider name (Source oidc only).
+	Provider string `json:"provider,omitempty"`
 }
 
 // SSO reports whether the principal came from a single sign-on source.
@@ -49,8 +54,12 @@ func (p *Principal) SSO() bool { return p != nil && p.Source != SourceMongoDB }
 // source so a MongoDB-only session can never be used by an SSO user of the
 // same name, or the other way round.
 func (p *Principal) Key() string {
-	if p.Source == SourceMongoDB {
+	switch p.Source {
+	case SourceMongoDB:
 		return "mongodb:" + p.User
+	case SourceOIDC:
+		// Qualified by provider: the same name at two providers is two people.
+		return "oidc:" + p.Provider + ":" + p.User
 	}
 	return "sso:" + p.User
 }
@@ -73,6 +82,10 @@ func (p *Principal) Subjects() []string {
 	out := []string{p.User, "user:" + p.User}
 	for _, g := range p.Groups {
 		out = append(out, g, "group:"+g)
+	}
+	if p.Source == SourceOIDC {
+		// "idp:<provider>" maps every user of one provider.
+		out = append(out, "idp:"+p.Provider)
 	}
 	return out
 }

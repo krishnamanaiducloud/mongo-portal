@@ -19,8 +19,17 @@ import (
 // authOptions tells the UI which sign-in methods are available right now.
 func (s *Server) authOptions() map[string]any {
 	src := s.Identity.Sources()
+	oidc := make([]map[string]any, 0, len(src.OIDC))
+	for _, o := range src.OIDC {
+		if o.Status.State == identity.StateDisabled {
+			continue
+		}
+		oidc = append(oidc, map[string]any{"name": o.Name, "displayName": o.DisplayName, "state": o.Status.State,
+			"reason": o.Status.Reason, "url": oidcPathPrefix + o.Name + "/start"})
+	}
 	return map[string]any{
 		"openshift":    src.OpenShift,
+		"oidc":         oidc,
 		"openshiftURL": oauthStartPath,
 		"header":       src.Header,
 		"dev":          src.Dev,
@@ -32,11 +41,7 @@ func (s *Server) authOptions() map[string]any {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
 	binding := s.ensurePreCookie(w, r, rc)
-	hasSession := false
-	if rc.p != nil {
-		_, err := s.Store.Get(rc.secret, rc.owner)
-		hasSession = err == nil
-	}
+	hasSession := rc.sess != nil
 	resp := map[string]any{
 		"authenticated": rc.p != nil,
 		"user":          rc.user(),
@@ -70,13 +75,15 @@ func (s *Server) globalPermissions(rc *reqCtx) map[string]bool {
 	if rc.p == nil {
 		return out
 	}
-	pol, subj := s.RBAC.Policy(), rc.p.Subjects()
+	pol, subj, prof := s.RBAC.Policy(), rc.p.Subjects(), rc.profile()
 	for res, acts := range rbac.Actions {
 		for _, a := range acts {
-			out[string(res)+":"+string(a)] = pol.Possible(subj, res, a)
+			out[string(res)+":"+string(a)] = pol.PossibleIn(subj, prof, res, a)
 		}
 	}
-	out["audit:all"] = pol.Allowed(subj, rbac.Audit, rbac.Get, "all")
+	out["audit:all"] = pol.AllowedIn(subj, prof, rbac.Audit, rbac.Get, "all")
+	out["sessions:all"] = pol.AllowedIn(subj, prof, rbac.Sessions, rbac.Get, "all")
+	out["sessions:revoke"] = pol.AllowedIn(subj, prof, rbac.Sessions, rbac.Delete, "all")
 	return out
 }
 
@@ -105,7 +112,8 @@ func (s *Server) handlePermissions(w http.ResponseWriter, r *http.Request, rc *r
 			writeError(w, r, http.StatusBadRequest, "invalid_input", "resource, action and object must name a valid permission")
 			return
 		}
-		resp["check"] = map[string]any{"resource": res, "action": act, "object": obj, "allowed": pol.Allowed(subj, res, act, obj)}
+		resp["check"] = map[string]any{"resource": res, "action": act, "object": obj, "profile": rc.profile(),
+			"allowed": pol.AllowedIn(subj, rc.profile(), res, act, obj)}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -127,8 +135,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, rc *reqCtx
 		// Operational details only for signed-in users.
 		resp["rbac"] = s.RBAC.Status()
 		resp["tracing"] = s.TracingEnabled
+		resp["tracingDetail"] = s.Tracing
 		resp["shell"] = s.Config.ShellEnabled()
-		resp["sessions"] = map[string]any{"active": s.Store.Count(), "max": s.Config.Session.MaxTotal}
+		resp["transfer"] = s.Config.TransferEnabled()
+		resp["sessions"] = map[string]any{"active": s.Store.Count(), "max": s.Config.Session.MaxTotal, "registry": s.Registry != nil}
+		resp["audit"] = s.Audit.SinkStatus()
+		resp["pod"] = s.Pod
+		if s.StoreStatus != nil {
+			resp["store"] = s.StoreStatus()
+		} else {
+			resp["store"] = map[string]any{"state": "disabled"}
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -151,7 +168,9 @@ func (s *Server) healthFor(rc *reqCtx, name string) mongoconn.Health {
 }
 
 type profileView struct {
-	Name              string           `json:"name"`
+	Name string `json:"name"`
+	// OIDC describes MONGODB-OIDC sign-in when the profile offers it.
+	OIDC              *profileOIDC     `json:"oidc,omitempty"`
 	DisplayName       string           `json:"displayName"`
 	Description       string           `json:"description,omitempty"`
 	DefaultAuthSource string           `json:"defaultAuthSource"`
@@ -163,8 +182,18 @@ type profileView struct {
 	Health            mongoconn.Health `json:"health"`
 }
 
+type profileOIDC struct {
+	DisplayName string `json:"displayName"`
+	Issuer      string `json:"issuer"`
+	URL         string `json:"url"`
+}
+
 func (s *Server) viewProfile(rc *reqCtx, p *config.Profile) profileView {
-	return profileView{
+	var oidc *profileOIDC
+	if p.OIDC != nil {
+		oidc = &profileOIDC{DisplayName: p.OIDC.DisplayName, Issuer: p.OIDC.Issuer, URL: mongoOIDCPrefix + p.Name + "/start"}
+	}
+	return profileView{OIDC: oidc,
 		Name: p.Name, DisplayName: p.DisplayName, Description: p.Description,
 		DefaultAuthSource: p.DefaultAuthSource, AuthMechanisms: p.AuthMechanisms,
 		TLSMode: p.TLS.Mode, ClientCertificate: p.TLS.ClientCertFile != "",
@@ -207,6 +236,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, rc *reqCtx)
 		writeError(w, r, http.StatusBadRequest, "unknown_profile", "Unknown connection profile")
 		return
 	}
+	if req.Mechanism == config.MechanismOIDC {
+		writeError(w, r, http.StatusBadRequest, "invalid_input", "MONGODB-OIDC sign-in starts at "+mongoOIDCPrefix+p.Name+"/start")
+		return
+	}
 	if req.AuthSource == "" {
 		req.AuthSource = p.DefaultAuthSource
 	}
@@ -216,23 +249,61 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, rc *reqCtx)
 		writeError(w, r, http.StatusBadRequest, "invalid_input", err.Error())
 		return
 	}
+	if fail := s.openSession(w, r, rc, p, cred); fail != nil {
+		if fail.retryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(fail.retryAfter))
+		}
+		writeError(w, r, fail.status, fail.code, fail.msg)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.sessionView(rc))
+}
 
-	// Without SSO the MongoDB user is the principal (and RBAC subject).
+// loginFailure is a refused MongoDB login, safe to show to the user.
+type loginFailure struct {
+	status, retryAfter int
+	code, msg          string
+}
+
+// openSession authenticates cred against p and creates the portal session.
+// On success the session cookie is set and rc describes the new session.
+// Passwords are cleared from cred before returning.
+func (s *Server) openSession(w http.ResponseWriter, r *http.Request, rc *reqCtx, p *config.Profile, cred mongoconn.Credentials) *loginFailure {
+	defer func() { cred.Password = "" }()
+	oidc := cred.Mechanism == config.MechanismOIDC
+	method := "mongodb"
+	if oidc {
+		method = "mongodb-oidc"
+	}
+	// Without SSO the MongoDB user is the principal (and RBAC subject). For
+	// MONGODB-OIDC the server names the user, so it is known only after
+	// authentication.
 	principal, limiterKey := rc.p, "sso\x00"+rc.owner
 	if !rc.p.SSO() {
-		principal, limiterKey = identity.MongoDBPrincipal(cred.Username, cred.AuthSource), "ip\x00"+clientIP(r)
+		principal, limiterKey = nil, "ip\x00"+clientIP(r)
+		if !oidc {
+			principal = identity.MongoDBPrincipal(cred.Username, cred.AuthSource)
+		}
 	}
-	ev := audit.Event{RequestID: rc.requestID, SSOUser: principal.User, Identity: string(principal.Source), Owner: principal.Key(),
-		PortalRole: strings.Join(s.RBAC.Policy().Roles(principal.Subjects()), " "),
-		MongoUser:  cred.Username + "@" + cred.AuthSource, Profile: p.Name, Action: "mongodb_login"}
+	ev := audit.Event{RequestID: rc.requestID, Profile: p.Name, Action: "mongodb_login", Method: method, Client: clientIP(r), UserAgent: truncateUA(r.UserAgent())}
+	fill := func(pr *identity.Principal) {
+		if pr != nil {
+			ev.SSOUser, ev.Identity, ev.Provider, ev.Owner = pr.User, string(pr.Source), pr.Provider, pr.Key()
+			ev.PortalRole = strings.Join(s.RBAC.Policy().Roles(pr.Subjects()), " ")
+		}
+	}
+	fill(principal)
 	target := p.Name + "\x00" + cred.AuthSource + "\x00" + cred.Username
+	if oidc {
+		target = p.Name + "\x00oidc\x00" + limiterKey
+	} else {
+		ev.MongoUser = cred.Username + "@" + cred.AuthSource
+	}
 	if ok, wait := s.limiter.Allow(limiterKey, target); !ok {
-		s.Metrics.AuthAttempts.WithLabelValues("mongodb", "rate_limited").Inc()
+		s.Metrics.AuthAttempts.WithLabelValues(method, "rate_limited").Inc()
 		ev.Outcome, ev.Reason = audit.Denied, "rate limited"
 		s.Audit.Record(r.Context(), ev)
-		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-		writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many login attempts; try again later")
-		return
+		return &loginFailure{status: http.StatusTooManyRequests, retryAfter: int(wait.Seconds()) + 1, code: "rate_limited", msg: "Too many login attempts; try again later"}
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), s.Config.Login.Timeout)
@@ -241,11 +312,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, rc *reqCtx)
 	case s.loginSem <- struct{}{}:
 		defer func() { <-s.loginSem }()
 	case <-ctx.Done():
-		writeError(w, r, http.StatusServiceUnavailable, "busy", "The portal is handling too many logins; try again")
-		return
+		return &loginFailure{status: http.StatusServiceUnavailable, code: "busy", msg: "The portal is handling too many logins; try again"}
 	}
 
 	pool := &mongoconn.PoolStats{}
+	start := time.Now()
 	res, err := s.Connect(ctx, p, cred, mongoconn.PoolHooks{
 		Stats: pool,
 		Created: func() {
@@ -258,26 +329,37 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, rc *reqCtx)
 		},
 	})
 	cred.Password = ""
+	ev.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		me := mongoconn.Classify(err)
-		ev.Outcome, ev.Reason = audit.Failure, string(me.Kind)
+		ev.Outcome, ev.Reason, ev.ErrorClass = audit.Failure, string(me.Kind), string(me.Kind)
 		s.Audit.Record(r.Context(), ev)
-		s.Metrics.AuthAttempts.WithLabelValues("mongodb", string(me.Kind)).Inc()
-		s.Logger.Warn("mongodb login failed", "request_id", rc.requestID, "profile", p.Name, "kind", me.Kind, "error", safeErr(me))
+		s.Metrics.AuthAttempts.WithLabelValues(method, string(me.Kind)).Inc()
+		s.Logger.Warn("mongodb login failed", "request_id", rc.requestID, "profile", p.Name, "method", method, "kind", me.Kind, "error", safeErr(me))
 		if me.Kind == mongoconn.KindAuthFailed {
 			s.limiter.Failure(target)
-			writeError(w, r, http.StatusUnauthorized, string(me.Kind), "Authentication failed. Check the username, password and authentication database.")
-			return
+			msg := "Authentication failed. Check the username, password and authentication database."
+			if oidc {
+				msg = "MongoDB rejected the OIDC token. Check that your identity is mapped to a MongoDB user or role on the server."
+			}
+			return &loginFailure{status: http.StatusUnauthorized, code: string(me.Kind), msg: msg}
 		}
-		writeError(w, r, me.HTTPStatus(), string(me.Kind), me.Msg)
-		return
+		return &loginFailure{status: me.HTTPStatus(), code: string(me.Kind), msg: me.Msg}
 	}
 	s.limiter.Success(target)
+	if res.User == "" && !oidc {
+		res.User, res.AuthSource = cred.Username, cred.AuthSource
+	}
+	if principal == nil {
+		principal = identity.MongoDBPrincipal(res.User, res.AuthSource)
+		fill(principal)
+	}
+	ev.MongoUser = res.User + "@" + res.AuthSource
 
 	sess := &session.Session{
 		Owner: principal.Key(), Principal: principal, Profile: p.Name,
-		MongoUser: cred.Username, AuthSource: cred.AuthSource, Mechanism: res.Mechanism,
-		TLS: res.TLSEnabled, Client: res.Client, Status: res.Status, Pool: pool, UserAgent: truncateUA(r.UserAgent()),
+		MongoUser: res.User, AuthSource: res.AuthSource, Mechanism: res.Mechanism, OIDC: cred.OIDC,
+		TLS: res.TLSEnabled, Client: res.Client, Status: res.Status, Pool: pool, UserAgent: truncateUA(r.UserAgent()), ClientIP: clientIP(r),
 	}
 	secret, err := s.Store.Create(sess, rc.secret)
 	if err != nil {
@@ -286,19 +368,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, rc *reqCtx)
 		dcancel()
 		ev.Outcome, ev.Reason = audit.Failure, "session capacity"
 		s.Audit.Record(r.Context(), ev)
-		writeError(w, r, http.StatusServiceUnavailable, "capacity", "The portal has reached its session limit; try again later")
-		return
+		return &loginFailure{status: http.StatusServiceUnavailable, code: "capacity", msg: "The portal has reached its session limit; try again later"}
 	}
 	s.setCookie(w, secret)
 	s.Metrics.ActiveSessions.Set(float64(s.Store.Count()))
-	s.Metrics.AuthAttempts.WithLabelValues("mongodb", "success").Inc()
-	ev.Outcome = audit.Success
+	s.Metrics.AuthAttempts.WithLabelValues(method, "success").Inc()
+	ev.Outcome, ev.Session = audit.Success, sess.Handle
 	s.Audit.Record(r.Context(), ev)
 	if !res.TLSEnabled {
 		s.Logger.Warn("mongodb session established without TLS", "profile", p.Name, "request_id", rc.requestID)
 	}
-	rc.p, rc.owner, rc.sess = principal, principal.Key(), sess
-	writeJSON(w, http.StatusOK, s.sessionView(rc))
+	rc.p, rc.owner, rc.sess, rc.secret = principal, principal.Key(), sess, secret
+	s.registerSession(sess)
+	return nil
 }
 
 func truncateUA(ua string) string {
@@ -369,63 +451,29 @@ func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request, rc *reqCt
 		s.clearCookie(w)
 		s.Metrics.ActiveSessions.Set(float64(s.Store.Count()))
 	}
+	logout := s.Config.Identity.SSOLogoutURL
 	if rc.p != nil {
 		s.Audit.Record(r.Context(), s.baseEvent(rc, "sign_out", audit.Success, ""))
+		if rc.p.Source == identity.SourceOIDC {
+			if prov := s.Identity.Provider(rc.p.Provider); prov != nil {
+				if u := prov.LogoutURL("", s.callbackURL(r, "/login")); u != "" {
+					logout = u
+				}
+			}
+		}
 	}
 	s.Identity.SignOut(w)
-	writeJSON(w, http.StatusOK, map[string]any{"signedOut": true, "ssoLogoutURL": s.Config.Identity.SSOLogoutURL})
-}
-
-func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
-	current := ""
-	if sess, err := s.Store.Get(rc.secret, rc.owner); err == nil {
-		current = sess.Handle
-	}
-	list := s.Store.ListByOwner(rc.owner)
-	out := make([]map[string]any, 0, len(list))
-	for _, x := range list {
-		out = append(out, map[string]any{
-			"handle": x.Handle, "profile": x.Profile, "mongoUser": x.MongoUser, "authSource": x.AuthSource,
-			"createdAt": x.CreatedAt.UTC(), "lastSeen": x.LastSeen().UTC(), "expiresAt": x.ExpiresAt.UTC(),
-			"userAgent": x.UserAgent, "current": x.Handle == current, "tls": x.TLS,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": out, "note": "Sessions are held by the portal instance serving this request."})
-}
-
-func (s *Server) handleTerminateSession(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
-	h := r.PathValue("handle")
-	if !s.Store.DeleteByHandle(rc.owner, h, "terminated") {
-		writeError(w, r, http.StatusNotFound, "not_found", "Session not found")
-		return
-	}
-	s.Metrics.ActiveSessions.Set(float64(s.Store.Count()))
-	s.Audit.Record(r.Context(), s.baseEvent(rc, "session_terminate", audit.Success, ""))
-	writeJSON(w, http.StatusOK, map[string]any{"terminated": true})
-}
-
-func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 1000 {
-		limit = 200
-	}
-	scope := rc.owner
-	if r.URL.Query().Get("scope") == "all" && s.allowed(rc, rbac.Audit, rbac.Get, "all") {
-		scope = ""
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"events": s.Audit.Recent(scope, limit),
-		"scope":  map[bool]string{true: "all", false: "self"}[scope == ""],
-		"note":   "Recent events recorded by this portal instance. The durable audit trail is the structured log stream.",
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"signedOut": true, "ssoLogoutURL": logout})
 }
 
 // OnSessionClosed is wired into the session store.
 func (s *Server) OnSessionClosed(sess *session.Session, reason string) {
 	s.Metrics.SessionsClosed.WithLabelValues(reason).Inc()
 	s.Metrics.ActiveSessions.Set(float64(s.Store.Count()))
+	s.unregister(sess.Handle)
 	if reason != "logout" {
-		e := audit.Event{Owner: sess.Owner, MongoUser: sess.MongoUser + "@" + sess.AuthSource, Profile: sess.Profile, Action: "session_closed", Outcome: audit.Success, Reason: reason}
+		e := audit.Event{Owner: sess.Owner, MongoUser: sess.MongoUser + "@" + sess.AuthSource, Profile: sess.Profile, Action: "session_closed",
+			Outcome: audit.Success, Reason: reason, Session: sess.Handle, Method: sess.Mechanism}
 		if sess.Principal != nil {
 			e.SSOUser, e.Identity = sess.Principal.User, string(sess.Principal.Source)
 		}

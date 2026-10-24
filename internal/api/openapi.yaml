@@ -158,7 +158,7 @@ paths:
   /sessions:
     get:
       tags: [session]
-      summary: The caller's sessions held by this portal instance
+      summary: The caller's sessions (every replica with the session registry, else this replica)
       responses:
         "200": { $ref: "#/components/responses/OK" }
         "401": { $ref: "#/components/responses/SSORequired" }
@@ -175,10 +175,26 @@ paths:
   /audit:
     get:
       tags: [identity]
-      summary: Recent audit events (own events; SREs may request scope=all)
+      summary: Search audit events (own events; scope=all needs audit get all)
+      description: |
+        Newest first, from the durable audit store when audit.persist is on, otherwise from
+        this replica's buffer. Page with next.before/next.beforeId. format=ndjson or csv
+        downloads the whole selection (bounded) and is itself audited.
       parameters:
         - { name: limit, in: query, schema: { type: integer, maximum: 1000 } }
         - { name: scope, in: query, schema: { type: string, enum: [self, all] } }
+        - { name: user, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: outcome, in: query, schema: { type: string, enum: [success, denied, failure] } }
+        - { name: profile, in: query, schema: { type: string } }
+        - { name: database, in: query, schema: { type: string } }
+        - { name: collection, in: query, schema: { type: string } }
+        - { name: q, in: query, description: Substring of action, target or reason, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: before, in: query, schema: { type: string, format: date-time } }
+        - { name: beforeId, in: query, schema: { type: string } }
+        - { name: format, in: query, schema: { type: string, enum: [ndjson, csv] } }
       responses:
         "200": { $ref: "#/components/responses/OK" }
   /server:
@@ -470,6 +486,216 @@ paths:
                   result: { type: string, description: Canonical Extended JSON document }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "428": { $ref: "#/components/responses/ConfirmationRequired" }
+  /audit/verify:
+    get:
+      tags: [audit]
+      summary: Verify the hash chain of one replica's stored audit events (audit get all)
+      parameters:
+        - { name: pod, in: query, required: true, schema: { type: string } }
+        - { name: from, in: query, description: First sequence number, schema: { type: integer } }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: The durable audit store is not configured }
+  /admin/sessions:
+    get:
+      tags: [session]
+      summary: Every portal session (sessions get all); every replica with the session registry
+      parameters:
+        - { name: owner, in: query, schema: { type: string } }
+        - { name: user, in: query, description: Substring of the portal or MongoDB user, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/sessions/revoke:
+    post:
+      tags: [session]
+      summary: Revoke one session (handle) or every session of a principal (owner) (sessions delete all)
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                handle: { type: string }
+                owner: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /settings:
+    get:
+      tags: [identity]
+      summary: Effective configuration without secrets (settings get)
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /databases/{db}/collections/{coll}/index-stats:
+    get:
+      tags: [indexes]
+      summary: Index usage ($indexStats) per member
+      parameters:
+        - $ref: "#/components/parameters/DB"
+        - $ref: "#/components/parameters/Coll"
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /databases/{db}/export:
+    get:
+      tags: [transfer]
+      summary: Export a database as a zip archive (one file per collection, metadata, manifest with SHA-256)
+      description: |
+        Streams every collection the caller may export (export create and documents get
+        on the namespace). Not a point-in-time backup: collections are read one after another.
+      parameters:
+        - $ref: "#/components/parameters/DB"
+        - { name: format, in: query, schema: { type: string, enum: [ndjson, json, bson] } }
+        - { name: ejson, in: query, schema: { type: string, enum: [relaxed, canonical] } }
+        - { name: limit, in: query, description: Total document limit, schema: { type: integer } }
+      responses:
+        "200": { description: zip archive, content: { application/zip: {} } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /databases/{db}/collections/{coll}/export:
+    get:
+      tags: [transfer]
+      summary: Export a collection (streamed download)
+      parameters:
+        - $ref: "#/components/parameters/DB"
+        - $ref: "#/components/parameters/Coll"
+        - { name: format, in: query, schema: { type: string, enum: [ndjson, json, csv, tsv, bson] } }
+        - { name: ejson, in: query, schema: { type: string, enum: [relaxed, canonical] } }
+        - { name: gzip, in: query, schema: { type: boolean } }
+        - { name: filter, in: query, description: Extended JSON filter, schema: { type: string } }
+        - { name: projection, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: fields, in: query, description: Comma-separated CSV/TSV columns, schema: { type: string } }
+      responses:
+        "200": { description: Exported data in the chosen format }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /databases/{db}/collections/{coll}/import:
+    post:
+      tags: [transfer]
+      summary: Upload a file and import it in the background (returns the job)
+      description: |
+        The body is the file (any content type; gzip is detected). Needs import create and
+        documents create (and documents update for upsert) on the namespace. MongoDB
+        validators apply; rejected documents are reported per record.
+      parameters:
+        - $ref: "#/components/parameters/DB"
+        - $ref: "#/components/parameters/Coll"
+        - $ref: "#/components/parameters/CSRF"
+        - { name: format, in: query, schema: { type: string, enum: [ndjson, json, csv, tsv, bson] } }
+        - { name: mode, in: query, schema: { type: string, enum: [insert, upsert] } }
+        - { name: mapping, in: query, description: "JSON array of {column, field, type, skip} for CSV/TSV", schema: { type: string } }
+        - { name: dryRun, in: query, schema: { type: boolean } }
+        - { name: keepBlanks, in: query, schema: { type: boolean } }
+        - { name: fileName, in: query, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "202": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: The caller already has an import running }
+        "413": { description: File larger than transfer.maxImportBytes }
+  /databases/{db}/collections/{coll}/import/preview:
+    post:
+      tags: [transfer]
+      summary: Parse the first part of a file (up to 1 MiB) and show the resulting documents
+      parameters:
+        - $ref: "#/components/parameters/DB"
+        - $ref: "#/components/parameters/Coll"
+        - $ref: "#/components/parameters/CSRF"
+        - { name: format, in: query, schema: { type: string, enum: [ndjson, json, csv, tsv, bson] } }
+        - { name: mapping, in: query, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /jobs:
+    get:
+      tags: [transfer]
+      summary: The caller's import jobs on this replica
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+  /jobs/{id}:
+    get:
+      tags: [transfer]
+      summary: Job progress and result
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [transfer]
+      summary: Cancel a job
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/CSRF"
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /jobs/{id}/errors:
+    get:
+      tags: [transfer]
+      summary: Rejected records of an import (NDJSON download)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: NDJSON lines with record, code and message }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /operations:
+    get:
+      tags: [monitoring]
+      summary: Running operations and connections ($currentOp metadata only), filtered and paged
+      parameters:
+        - { name: state, in: query, schema: { type: string, enum: [active, idle, all] } }
+        - { name: client, in: query, schema: { type: string } }
+        - { name: app, in: query, schema: { type: string } }
+        - { name: user, in: query, schema: { type: string } }
+        - { name: ns, in: query, schema: { type: string } }
+        - { name: op, in: query, schema: { type: string } }
+        - { name: minSecs, in: query, schema: { type: number } }
+        - { name: internal, in: query, schema: { type: boolean } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 500 } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /operations/kill:
+    post:
+      tags: [monitoring]
+      summary: End a running client operation with killOp (operations kill; MongoDB authorizes)
+      description: |
+        The operation must exist, be active and belong to a client. killOp ends an operation,
+        not a connection. Confirm by sending confirm equal to the operation id.
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [opid, confirm]
+              properties:
+                opid: { oneOf: [{ type: integer }, { type: string }] }
+                confirm: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: The operation cannot be ended (gone, internal, idle or already ending) }
         "428": { $ref: "#/components/responses/ConfirmationRequired" }
   /openapi.yaml:
     get:

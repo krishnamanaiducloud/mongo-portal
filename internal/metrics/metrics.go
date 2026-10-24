@@ -21,6 +21,15 @@ type Metrics struct {
 	MongoOps        *prometheus.HistogramVec
 	SessionsClosed  *prometheus.CounterVec
 	BuildInfo       *prometheus.GaugeVec
+	// AuditDropped counts audit events that could not be persisted to the
+	// durable store (they remain in the log stream).
+	AuditDropped prometheus.Counter
+	// TransferJobs counts import/export jobs by kind and outcome;
+	// TransferDocs counts documents moved.
+	TransferJobs *prometheus.CounterVec
+	TransferDocs *prometheus.CounterVec
+	// OpsKilled counts operations ended with killOp from the portal.
+	OpsKilled prometheus.Counter
 }
 
 // New registers and returns the portal metrics.
@@ -60,12 +69,25 @@ func New() *Metrics {
 		BuildInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "mongo_portal_build_info", Help: "Build information.",
 		}, []string{"version", "commit", "goversion"}),
+		AuditDropped: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "mongo_portal_audit_events_dropped_total", Help: "Audit events not persisted to the durable store (still in the log stream).",
+		}),
+		TransferJobs: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "mongo_portal_transfer_jobs_total", Help: "Import and export jobs by kind and outcome.",
+		}, []string{"kind", "outcome"}),
+		TransferDocs: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "mongo_portal_transfer_documents_total", Help: "Documents imported or exported.",
+		}, []string{"kind"}),
+		OpsKilled: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "mongo_portal_operations_killed_total", Help: "MongoDB operations ended with killOp from the portal.",
+		}),
 	}
 	r.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.HTTPRequests, m.HTTPDuration, m.AuthAttempts, m.AuthzDenials, m.ActiveSessions,
 		m.MongoConns, m.MongoConnEvents, m.MongoOps, m.SessionsClosed, m.BuildInfo,
+		m.AuditDropped, m.TransferJobs, m.TransferDocs, m.OpsKilled,
 	)
 	return m
 }

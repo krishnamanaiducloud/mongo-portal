@@ -87,6 +87,83 @@ func TestDefaultRoleOnlyForUnmappedUsers(t *testing.T) {
 	}
 }
 
+// Portal administration and data access are separate: platform admins and
+// auditors get no data, database admins get no portal administration.
+func TestAdministrativeRolesAreSeparated(t *testing.T) {
+	p := mustParse(t, `
+g, platform, role:platform-admin
+g, auditors, role:auditor
+g, ops, role:monitoring
+g, dbas, role:dbadmin
+`, "")
+	cases := []struct {
+		subj string
+		res  Resource
+		act  Action
+		obj  string
+		want bool
+	}{
+		{"platform", Sessions, Delete, "all", true},
+		{"platform", Settings, Get, "*", true},
+		{"platform", Audit, Get, "all", true},
+		{"platform", Documents, Get, "app/orders", false},
+		{"platform", Databases, Delete, "app", false},
+		{"auditors", Audit, Get, "all", true},
+		{"auditors", Sessions, Get, "all", true},
+		{"auditors", Sessions, Delete, "all", false},
+		{"auditors", Export, Create, "app/orders", false},
+		{"ops", Monitoring, Get, "prod", true},
+		{"ops", Operations, Get, "prod", true},
+		{"ops", Operations, Kill, "prod", false},
+		{"ops", Documents, Get, "app/orders", false},
+		{"dbas", Databases, Delete, "app", true},
+		{"dbas", Operations, Kill, "prod", true},
+		{"dbas", Import, Create, "app/orders", true},
+		{"dbas", Sessions, Delete, "all", false},
+		{"dbas", Audit, Get, "all", false},
+	}
+	for _, c := range cases {
+		if got := p.Allowed([]string{c.subj}, c.res, c.act, c.obj); got != c.want {
+			t.Errorf("%s %s %s %s = %v, want %v", c.subj, c.res, c.act, c.obj, got, c.want)
+		}
+	}
+	// Import is a write: read-only users may export but not import.
+	ro := mustParse(t, "g, devs, role:readonly\n", "")
+	if !ro.Allowed([]string{"devs"}, Export, Create, "app/x") || ro.Allowed([]string{"devs"}, Import, Create, "app/x") {
+		t.Error("readonly must export but not import")
+	}
+}
+
+// A profile-scoped rule applies only in sessions of matching profiles.
+func TestProfileScopedRules(t *testing.T) {
+	p := mustParse(t, `
+p, role:dev-writer, documents, *, *, allow, dev-*
+p, role:dev-writer, documents, get, *, allow
+p, role:no-prod-delete, documents, delete, *, deny, prod
+g, devs, role:dev-writer
+g, devs, role:no-prod-delete
+`, "")
+	s := []string{"devs"}
+	if !p.AllowedIn(s, "dev-eu", Documents, Update, "app/x") {
+		t.Error("profile-scoped allow should apply to dev-eu")
+	}
+	if p.AllowedIn(s, "prod", Documents, Update, "app/x") || p.AllowedIn(s, "", Documents, Update, "app/x") {
+		t.Error("profile-scoped allow leaked to another or no profile")
+	}
+	if !p.AllowedIn(s, "prod", Documents, Get, "app/x") {
+		t.Error("unscoped rule must apply in every profile")
+	}
+	if !p.PossibleIn(s, "dev-eu", Documents, Delete) || p.PossibleIn(s, "prod", Documents, Delete) {
+		t.Error("PossibleIn must follow profile scope")
+	}
+	if _, err := Parse("p, role:x, documents, get, *, allow, ", ""); err == nil {
+		t.Error("empty profile field must be rejected")
+	}
+	if _, err := Parse("p, role:x, operations, kill, *, allow, prod, extra", ""); err == nil {
+		t.Error("too many fields must be rejected")
+	}
+}
+
 func TestNamespaceScopedRulesAndDeny(t *testing.T) {
 	p := mustParse(t, `
 p, role:orders-rw, documents, *, app/orders*, allow

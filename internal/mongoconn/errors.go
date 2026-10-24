@@ -26,6 +26,9 @@ const (
 	KindDuplicate    Kind = "duplicate_key"
 	KindBadQuery     Kind = "invalid_query"
 	KindOther        Kind = "mongo_error"
+	// KindOIDC covers MONGODB-OIDC problems the user or the administrators
+	// can act on (provider mismatch, expired sign-in, mechanism disabled).
+	KindOIDC Kind = "mongo_oidc_failed"
 )
 
 // Error is returned to API handlers. Msg is safe to show to the user who made
@@ -52,7 +55,7 @@ func (e *Error) HTTPStatus() int {
 	switch e.Kind {
 	case KindInvalidInput, KindBadQuery:
 		return http.StatusBadRequest
-	case KindAuthFailed:
+	case KindAuthFailed, KindOIDC:
 		return http.StatusUnauthorized
 	case KindUnauthorized:
 		return http.StatusForbidden
@@ -78,6 +81,14 @@ func Classify(err error) *Error {
 		return e
 	}
 
+	switch {
+	case errors.Is(err, ErrOIDCProviderMismatch):
+		return &Error{Kind: KindOIDC, Msg: "MongoDB trusts a different identity provider or client than this connection profile. Check the profile's oidc.issuer and oidc.clientID against the server's oidcIdentityProviders.", Err: err}
+	case errors.Is(err, ErrOIDCSignInRequired):
+		return &Error{Kind: KindOIDC, Msg: "Your OIDC sign-in for MongoDB has expired. Connect with OIDC again.", Err: err}
+	case strings.Contains(err.Error(), "MONGODB-OIDC") && (strings.Contains(err.Error(), "not enabled") || strings.Contains(err.Error(), "MechanismUnavailable")):
+		return &Error{Kind: KindOIDC, Msg: "The MongoDB deployment does not accept MONGODB-OIDC (authenticationMechanisms or oidcIdentityProviders is not set on the server).", Err: err}
+	}
 	if isTLSError(err) {
 		return &Error{Kind: KindTLS, Msg: "TLS certificate verification with MongoDB failed", Err: err}
 	}

@@ -2,7 +2,7 @@
 //
 // A policy is a CSV document with two kinds of lines:
 //
-//	p, <role>, <resource>, <action>, <object>[, allow|deny]
+//	p, <role>, <resource>, <action>, <object>[, allow|deny[, <profile>]]
 //	g, <subject>, <role>
 //
 // Roles are named "role:<name>". A subject is an SSO user or group name
@@ -10,7 +10,11 @@
 // "group:<name>" or "mongodb:<user>[@<authSource>]" for sessions opened with
 // MongoDB credentials only. A "g" line may also make one role inherit
 // another. Objects are glob patterns ('*' matches any text, '?' one
-// character) over "<database>" or "<database>/<collection>".
+// character) over "<database>" or "<database>/<collection>" (data resources),
+// a profile name (server, monitoring, operations) or "self"/"all" (audit,
+// sessions). The optional last field limits a rule to connection profiles
+// matching a glob (default "*", every profile); profile-scoped rules apply
+// only to requests made in a MongoDB session of a matching profile.
 //
 // A request is allowed when at least one rule of the subject's roles allows
 // it and none denies it. Portal RBAC only narrows access: MongoDB still
@@ -39,6 +43,18 @@ const (
 	Shell       Resource = "shell"
 	Server      Resource = "server"
 	Audit       Resource = "audit"
+	// Export and Import move data out of and into collections.
+	Export Resource = "export"
+	Import Resource = "import"
+	// Monitoring is the deployment monitoring page and API (object: profile).
+	Monitoring Resource = "monitoring"
+	// Operations are running MongoDB operations (object: profile); kill ends
+	// one with killOp.
+	Operations Resource = "operations"
+	// Sessions are portal sessions (object: "self" or "all").
+	Sessions Resource = "sessions"
+	// Settings is the effective portal configuration view (object: "*").
+	Settings Resource = "settings"
 )
 
 const (
@@ -48,6 +64,7 @@ const (
 	Delete Action = "delete"
 	Use    Action = "use"   // shell: open the shell
 	Admin  Action = "admin" // shell: administrative commands (currentOp, killOp, ...)
+	Kill   Action = "kill"  // operations: end a running operation (killOp)
 )
 
 // Actions lists the actions valid for each resource.
@@ -59,6 +76,12 @@ var Actions = map[Resource][]Action{
 	Shell:       {Use, Admin},
 	Server:      {Get},
 	Audit:       {Get},
+	Export:      {Create},
+	Import:      {Create},
+	Monitoring:  {Get},
+	Operations:  {Get, Kill},
+	Sessions:    {Get, Delete},
+	Settings:    {Get},
 }
 
 // Built-in role names.
@@ -70,6 +93,16 @@ const (
 	// every data operation and MongoDB decides. It differs from role:admin
 	// only in portal-level permissions (other users' audit events).
 	RoleMongoDB = "role:mongodb"
+	// RoleAuditor reads every audit event and the session inventory, no data.
+	RoleAuditor = "role:auditor"
+	// RoleMonitoring sees monitoring and running operations, no data.
+	RoleMonitoring = "role:monitoring"
+	// RolePlatformAdmin administers the portal (sessions, audit, settings,
+	// monitoring); it grants no data access.
+	RolePlatformAdmin = "role:platform-admin"
+	// RoleDBAdmin manages data, indexes and collections and may end
+	// operations, without portal administration.
+	RoleDBAdmin = "role:dbadmin"
 )
 
 // BuiltinPolicy defines the built-in roles. Policies may add rules to them
@@ -82,6 +115,10 @@ p, role:readonly, indexes, get, *, allow
 p, role:readonly, shell, use, *, allow
 p, role:readonly, server, get, *, allow
 p, role:readonly, audit, get, self, allow
+p, role:readonly, export, create, *, allow
+p, role:readonly, monitoring, get, *, allow
+p, role:readonly, sessions, get, self, allow
+p, role:readonly, sessions, delete, self, allow
 
 g, role:editor, role:readonly
 p, role:editor, documents, create, *, allow
@@ -90,6 +127,7 @@ p, role:editor, documents, delete, *, allow
 p, role:editor, indexes, create, *, allow
 p, role:editor, indexes, delete, *, allow
 p, role:editor, collections, create, *, allow
+p, role:editor, import, create, *, allow
 
 p, role:admin, *, *, *, allow
 
@@ -100,6 +138,32 @@ p, role:mongodb, indexes, *, *, allow
 p, role:mongodb, shell, *, *, allow
 p, role:mongodb, server, get, *, allow
 p, role:mongodb, audit, get, self, allow
+p, role:mongodb, export, create, *, allow
+p, role:mongodb, import, create, *, allow
+p, role:mongodb, monitoring, get, *, allow
+p, role:mongodb, operations, *, *, allow
+p, role:mongodb, sessions, get, self, allow
+p, role:mongodb, sessions, delete, self, allow
+
+p, role:monitoring, server, get, *, allow
+p, role:monitoring, monitoring, get, *, allow
+p, role:monitoring, operations, get, *, allow
+p, role:monitoring, sessions, get, self, allow
+p, role:monitoring, sessions, delete, self, allow
+
+g, role:auditor, role:monitoring
+p, role:auditor, audit, get, *, allow
+p, role:auditor, sessions, get, all, allow
+
+g, role:platform-admin, role:auditor
+p, role:platform-admin, sessions, delete, all, allow
+p, role:platform-admin, settings, get, *, allow
+
+g, role:dbadmin, role:editor
+p, role:dbadmin, databases, *, *, allow
+p, role:dbadmin, collections, *, *, allow
+p, role:dbadmin, shell, admin, *, allow
+p, role:dbadmin, operations, *, *, allow
 `
 
 // Rule is one "p" line.
@@ -109,6 +173,8 @@ type Rule struct {
 	Action   string `json:"action"`
 	Object   string `json:"object"`
 	Effect   string `json:"effect"`
+	// Profile limits the rule to connection profiles matching this glob.
+	Profile string `json:"profile"`
 }
 
 // Policy is a parsed, immutable policy.
@@ -160,12 +226,18 @@ func (p *Policy) add(csv, name string) error {
 func (p *Policy) addLine(f []string) error {
 	switch f[0] {
 	case "p":
-		if len(f) != 5 && len(f) != 6 {
-			return errors.New(`"p" lines need: p, role, resource, action, object[, allow|deny]`)
+		if len(f) < 5 || len(f) > 7 {
+			return errors.New(`"p" lines need: p, role, resource, action, object[, allow|deny[, profile]]`)
 		}
-		r := Rule{Role: f[1], Resource: f[2], Action: f[3], Object: f[4], Effect: "allow"}
-		if len(f) == 6 {
+		r := Rule{Role: f[1], Resource: f[2], Action: f[3], Object: f[4], Effect: "allow", Profile: "*"}
+		if len(f) >= 6 {
 			r.Effect = strings.ToLower(f[5])
+		}
+		if len(f) == 7 {
+			r.Profile = f[6]
+			if r.Profile == "" {
+				return errors.New("profile must not be empty (use * for every profile)")
+			}
 		}
 		if !strings.HasPrefix(r.Role, "role:") || len(r.Role) == len("role:") {
 			return fmt.Errorf("role %q must be named role:<name>", r.Role)
@@ -251,12 +323,19 @@ func (p *Policy) DirectRoles(subjects []string) []string {
 	return out
 }
 
-// Allowed reports whether subjects may perform action on resource/object.
+// Allowed reports whether subjects may perform action on resource/object
+// outside a connection profile (profile-scoped rules do not apply).
 func (p *Policy) Allowed(subjects []string, res Resource, act Action, object string) bool {
+	return p.AllowedIn(subjects, "", res, act, object)
+}
+
+// AllowedIn reports whether subjects may perform action on resource/object
+// in a session of the given connection profile ("" for none).
+func (p *Policy) AllowedIn(subjects []string, profile string, res Resource, act Action, object string) bool {
 	allowed := false
 	for _, role := range p.Roles(subjects) {
 		for _, r := range p.rules[role] {
-			if !match(r.Resource, string(res)) || !match(r.Action, string(act)) || !Glob(r.Object, object) {
+			if !match(r.Resource, string(res)) || !match(r.Action, string(act)) || !Glob(r.Object, object) || !profileMatch(r.Profile, profile) {
 				continue
 			}
 			if r.Effect == "deny" {
@@ -272,10 +351,15 @@ func (p *Policy) Allowed(subjects []string, res Resource, act Action, object str
 // resource for some object. It is a UI hint for global controls; requests
 // are always checked with Allowed against the concrete object.
 func (p *Policy) Possible(subjects []string, res Resource, act Action) bool {
+	return p.PossibleIn(subjects, "", res, act)
+}
+
+// PossibleIn is Possible within a session of the given profile.
+func (p *Policy) PossibleIn(subjects []string, profile string, res Resource, act Action) bool {
 	for _, role := range p.Roles(subjects) {
 		for _, r := range p.rules[role] {
-			if r.Effect == "allow" && match(r.Resource, string(res)) && match(r.Action, string(act)) {
-				if !p.deniedEverywhere(subjects, res, act) {
+			if r.Effect == "allow" && match(r.Resource, string(res)) && match(r.Action, string(act)) && profileMatch(r.Profile, profile) {
+				if !p.deniedEverywhere(subjects, profile, res, act) {
 					return true
 				}
 			}
@@ -284,10 +368,10 @@ func (p *Policy) Possible(subjects []string, res Resource, act Action) bool {
 	return false
 }
 
-func (p *Policy) deniedEverywhere(subjects []string, res Resource, act Action) bool {
+func (p *Policy) deniedEverywhere(subjects []string, profile string, res Resource, act Action) bool {
 	for _, role := range p.Roles(subjects) {
 		for _, r := range p.rules[role] {
-			if r.Effect == "deny" && r.Object == "*" && match(r.Resource, string(res)) && match(r.Action, string(act)) {
+			if r.Effect == "deny" && r.Object == "*" && match(r.Resource, string(res)) && match(r.Action, string(act)) && profileMatch(r.Profile, profile) {
 				return true
 			}
 		}
@@ -318,6 +402,15 @@ func (p *Policy) Subjects() []string {
 }
 
 func match(pattern, v string) bool { return pattern == "*" || pattern == v }
+
+// profileMatch applies a rule's profile glob. Rules for every profile ("*")
+// always apply; profile-scoped rules need a matching session profile.
+func profileMatch(pattern, profile string) bool {
+	if pattern == "*" || pattern == "" {
+		return true
+	}
+	return profile != "" && Glob(pattern, profile)
+}
 
 // Glob matches s against pattern, where '*' matches any (possibly empty)
 // text including '/', and '?' matches exactly one character.

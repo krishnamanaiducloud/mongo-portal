@@ -68,6 +68,16 @@ type Deps struct {
 	Build   BuildInfo
 	// TracingEnabled is reported on the status page.
 	TracingEnabled bool
+	// Tracing describes the effective tracing configuration (status page).
+	Tracing map[string]any
+	// Pod names this replica (audit chain and session registry).
+	Pod string
+	// Registry is the shared session registry (nil without a store).
+	Registry SessionRegistry
+	// AuditChain reads stored events of one replica for verification.
+	AuditChain func(ctx context.Context, pod string, from, limit int64) ([]audit.Event, error)
+	// StoreStatus reports the shared store connection (nil without one).
+	StoreStatus func() map[string]any
 }
 
 // Server is the HTTP API.
@@ -78,6 +88,8 @@ type Server struct {
 	routes   []Route
 	mux      *http.ServeMux
 	state    *identity.Sealer
+	midp     mongoOIDCCache
+	jobs     *jobManager
 }
 
 // Route describes a registered API route (used by the OpenAPI contract test).
@@ -138,6 +150,7 @@ func New(d Deps) *Server {
 		loginSem: make(chan struct{}, l.MaxConcurrent),
 		mux:      http.NewServeMux(),
 		state:    state,
+		jobs:     newJobManager(d.Config.Transfer.MaxConcurrentJobs),
 	}
 	s.register()
 	return s
@@ -161,7 +174,15 @@ type handlerFunc func(w http.ResponseWriter, r *http.Request, rc *reqCtx)
 func (s *Server) handle(method, path string, lvl level, bodyLimit int64, h handlerFunc) {
 	s.routes = append(s.routes, Route{Method: method, Path: path})
 	pattern := method + " " + path
-	s.mux.Handle(pattern, s.instrument(pattern, bodyLimit, s.guard(lvl, h)))
+	s.mux.Handle(pattern, s.instrument(pattern, bodyLimit, s.guard(lvl, false, h)))
+}
+
+// handleUpload registers a route whose body is a file (any content type).
+// Session, CSRF and origin checks are the same as for JSON routes.
+func (s *Server) handleUpload(method, path string, bodyLimit int64, h handlerFunc) {
+	s.routes = append(s.routes, Route{Method: method, Path: path})
+	pattern := method + " " + path
+	s.mux.Handle(pattern, s.instrument(pattern, bodyLimit, s.guard(levelSession, true, h)))
 }
 
 func (s *Server) register() {
@@ -180,6 +201,10 @@ func (s *Server) register() {
 	s.handle("GET", v+"/sessions", levelIdentity, 0, s.handleListSessions)
 	s.handle("DELETE", v+"/sessions/{handle}", levelIdentity, 0, s.handleTerminateSession)
 	s.handle("GET", v+"/audit", levelIdentity, 0, s.handleAudit)
+	s.handle("GET", v+"/audit/verify", levelIdentity, 0, s.handleAuditVerify)
+	s.handle("GET", v+"/admin/sessions", levelIdentity, 0, s.handleAdminSessions)
+	s.handle("GET", v+"/settings", levelIdentity, 0, s.handleSettings)
+	s.handle("POST", v+"/admin/sessions/revoke", levelIdentity, small, s.handleAdminRevoke)
 	s.handle("GET", v+"/server", levelSession, 0, s.handleServerInfo)
 	s.handle("GET", v+"/monitoring", levelSession, 0, s.handleMonitoring)
 
@@ -198,7 +223,22 @@ func (s *Server) register() {
 	s.handle("GET", v+"/databases/{db}/collections/{coll}/indexes", levelSession, 0, s.handleListIndexes)
 	s.handle("POST", v+"/databases/{db}/collections/{coll}/indexes", levelSession, small, s.handleCreateIndex)
 	s.handle("DELETE", v+"/databases/{db}/collections/{coll}/indexes/{name}", levelSession, 0, s.handleDropIndex)
+	s.handle("GET", v+"/databases/{db}/collections/{coll}/index-stats", levelSession, 0, s.handleIndexStats)
 	s.handle("POST", v+"/shell", levelSession, docBody, s.handleShell)
+
+	// Import and export.
+	s.handle("GET", v+"/databases/{db}/export", levelSession, 0, s.handleExportDatabase)
+	s.handle("GET", v+"/databases/{db}/collections/{coll}/export", levelSession, 0, s.handleExportCollection)
+	s.handleUpload("POST", v+"/databases/{db}/collections/{coll}/import", s.Config.Transfer.MaxImportBytes, s.handleImport)
+	s.handleUpload("POST", v+"/databases/{db}/collections/{coll}/import/preview", previewBytes, s.handleImportPreview)
+	s.handle("GET", v+"/jobs", levelSession, 0, s.handleListJobs)
+	s.handle("GET", v+"/jobs/{id}", levelSession, 0, s.handleGetJob)
+	s.handle("DELETE", v+"/jobs/{id}", levelSession, 0, s.handleCancelJob)
+	s.handle("GET", v+"/jobs/{id}/errors", levelSession, 0, s.handleJobErrors)
+
+	// Running operations.
+	s.handle("GET", v+"/operations", levelSession, 0, s.handleListOperations)
+	s.handle("POST", v+"/operations/kill", levelSession, small, s.handleKillOperation)
 
 	s.routes = append(s.routes, Route{Method: "GET", Path: v + "/openapi.yaml"})
 	s.mux.Handle("GET "+v+"/openapi.yaml", s.instrument("GET "+v+"/openapi.yaml", 0, http.HandlerFunc(serveOpenAPI)))
@@ -206,6 +246,12 @@ func (s *Server) register() {
 	// OpenShift OAuth login (browser redirects, not JSON API).
 	s.mux.Handle("GET "+oauthStartPath, s.instrument("GET "+oauthStartPath, 0, http.HandlerFunc(s.handleOAuthStart)))
 	s.mux.Handle("GET "+oauthCallbackPath, s.instrument("GET "+oauthCallbackPath, 0, http.HandlerFunc(s.handleOAuthCallback)))
+	// OpenID Connect providers.
+	s.mux.Handle("GET "+oidcPathPrefix+"{provider}/start", s.instrument("GET /oauth/oidc/start", 0, http.HandlerFunc(s.handleOIDCStart)))
+	s.mux.Handle("GET "+oidcPathPrefix+"{provider}/callback", s.instrument("GET /oauth/oidc/callback", 0, http.HandlerFunc(s.handleOIDCCallback)))
+	// MONGODB-OIDC: sign-in at the identity provider the database trusts.
+	s.mux.Handle("GET "+mongoOIDCCallback, s.instrument("GET "+mongoOIDCCallback, 0, http.HandlerFunc(s.handleMongoOIDCCallback)))
+	s.mux.Handle("GET "+mongoOIDCPrefix+"{profile}/start", s.instrument("GET /oauth/mongodb/start", 0, http.HandlerFunc(s.handleMongoOIDCStart)))
 
 	s.mux.Handle("/api/", s.instrument("api_not_found", 0, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "No such API endpoint")
@@ -232,7 +278,7 @@ func (s *Server) Handler() http.Handler {
 // guard resolves the principal and enforces CSRF and session requirements.
 // Identity is optional: without SSO, a MongoDB-only session supplies the
 // principal, and anonymous requests may use the public endpoints.
-func (s *Server) guard(lvl level, h handlerFunc) http.Handler {
+func (s *Server) guard(lvl level, rawBody bool, h handlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rc := from(r)
 		if c, err := r.Cookie(s.Config.Session.CookieName); err == nil {
@@ -249,6 +295,11 @@ func (s *Server) guard(lvl level, h handlerFunc) http.Handler {
 		}
 		if rc.span != nil && rc.p != nil {
 			rc.span.SetAttributes(attribute.String("portal.identity", string(rc.p.Source)))
+		}
+		if lvl < levelSession && rc.p != nil {
+			// The session, if any, gives profile context to RBAC and audit
+			// without counting as activity.
+			rc.sess = s.Store.Peek(rc.secret, rc.owner)
 		}
 
 		if lvl >= levelIdentity {
@@ -270,7 +321,7 @@ func (s *Server) guard(lvl level, h handlerFunc) http.Handler {
 				writeError(w, r, http.StatusForbidden, "csrf_failed", "Cross-site request rejected")
 				return
 			}
-			if r.ContentLength != 0 && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			if !rawBody && r.ContentLength != 0 && !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 				writeError(w, r, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
 				return
 			}
@@ -335,7 +386,16 @@ func (s *Server) allowed(rc *reqCtx, res rbac.Resource, act rbac.Action, object 
 	if rc.p == nil {
 		return false
 	}
-	return s.RBAC.Policy().Allowed(rc.p.Subjects(), res, act, object)
+	return s.RBAC.Policy().AllowedIn(rc.p.Subjects(), rc.profile(), res, act, object)
+}
+
+// profile is the connection profile of the request's MongoDB session, or ""
+// outside a session (profile-scoped RBAC rules then do not apply).
+func (rc *reqCtx) profile() string {
+	if rc.sess == nil {
+		return ""
+	}
+	return rc.sess.Profile
 }
 
 // authorize checks the RBAC policy and writes a 403 when denied.
@@ -500,6 +560,9 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -546,9 +609,6 @@ func (s *Server) instrument(route string, bodyLimit int64, next http.Handler) ht
 			slog.Int("status", sw.status),
 			slog.Int64("duration_ms", dur.Milliseconds()),
 			slog.Int("bytes", sw.bytes),
-		}
-		if sc := span.SpanContext(); sc.HasTraceID() {
-			attrs = append(attrs, slog.String("trace_id", sc.TraceID().String()))
 		}
 		if rc.p != nil {
 			attrs = append(attrs, slog.String("sso_user", rc.p.User), slog.String("identity", string(rc.p.Source)))

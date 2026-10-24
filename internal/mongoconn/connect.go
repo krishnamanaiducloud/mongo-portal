@@ -32,6 +32,8 @@ type Credentials struct {
 	Password   string
 	AuthSource string
 	Mechanism  string
+	// OIDC carries the user's own tokens for MONGODB-OIDC (no password).
+	OIDC *OIDCTokens
 }
 
 // ConnectResult describes a successfully authenticated client.
@@ -40,6 +42,10 @@ type ConnectResult struct {
 	Status     *ConnectionStatus
 	Mechanism  string
 	TLSEnabled bool
+	// User and AuthSource are the principal MongoDB authenticated (for
+	// MONGODB-OIDC the server derives them from the token).
+	User       string
+	AuthSource string
 }
 
 // PoolHooks receives connection pool lifecycle callbacks (for metrics).
@@ -73,6 +79,20 @@ func (p *PoolStats) Snapshot() PoolSnapshot {
 
 // Validate checks user supplied credential fields.
 func (c Credentials) Validate(p *config.Profile) error {
+	if c.Mechanism == config.MechanismOIDC {
+		switch {
+		case p.OIDC == nil || !slices.Contains(p.AuthMechanisms, config.MechanismOIDC):
+			return errors.New("this connection profile does not offer MONGODB-OIDC")
+		case c.OIDC == nil:
+			return errors.New("MONGODB-OIDC needs a sign-in at the identity provider")
+		case c.Password != "":
+			return errors.New("MONGODB-OIDC does not use a password")
+		}
+		return nil
+	}
+	if c.OIDC != nil {
+		return errors.New("OIDC tokens are only used with MONGODB-OIDC")
+	}
 	if c.Username == "" || len(c.Username) > 256 || strings.ContainsAny(c.Username, "\x00\r\n") {
 		return errors.New("username is required and must not contain control characters")
 	}
@@ -104,13 +124,23 @@ func Connect(ctx context.Context, p *config.Profile, cred Credentials, hooks Poo
 	if mech == "" && len(p.AuthMechanisms) == 1 {
 		mech = p.AuthMechanisms[0]
 	}
-	opts.SetAuth(options.Credential{
-		AuthMechanism: mech,
-		AuthSource:    cred.AuthSource,
-		Username:      cred.Username,
-		Password:      cred.Password,
-		PasswordSet:   true,
-	})
+	if mech == config.MechanismOIDC {
+		// The human callback hands MongoDB the user's own access token. The
+		// token is only sent to the profile's hosts (ALLOWED_HOSTS).
+		opts.SetAuth(options.Credential{
+			AuthMechanism:           config.MechanismOIDC,
+			OIDCHumanCallback:       cred.OIDC.Callback,
+			AuthMechanismProperties: map[string]string{"ALLOWED_HOSTS": strings.Join(p.OIDC.AllowedHosts, ",")},
+		})
+	} else {
+		opts.SetAuth(options.Credential{
+			AuthMechanism: mech,
+			AuthSource:    cred.AuthSource,
+			Username:      cred.Username,
+			Password:      cred.Password,
+			PasswordSet:   true,
+		})
+	}
 
 	client, err := mongo.Connect(opts)
 	if err != nil {
@@ -135,11 +165,24 @@ func Connect(ctx context.Context, p *config.Profile, cred Credentials, hooks Poo
 	if err != nil {
 		return nil, Classify(err)
 	}
-	if !status.HasUser(cred.Username, cred.AuthSource) {
+	user, source := cred.Username, cred.AuthSource
+	if mech == config.MechanismOIDC {
+		// OIDC users live in $external under the server's authNamePrefix.
+		for _, u := range status.AuthInfo.AuthenticatedUsers {
+			if u.DB == "$external" {
+				user, source = u.User, u.DB
+				break
+			}
+		}
+		if user == "" {
+			return nil, &Error{Kind: KindAuthFailed, Msg: "MongoDB did not confirm an OIDC user"}
+		}
+	}
+	if !status.HasUser(user, source) {
 		return nil, &Error{Kind: KindAuthFailed, Msg: "MongoDB did not confirm the authenticated user"}
 	}
 	ok = true
-	return &ConnectResult{Client: client, Status: status, Mechanism: mech, TLSEnabled: p.TLS.Mode == config.TLSEnabled}, nil
+	return &ConnectResult{Client: client, Status: status, Mechanism: mech, TLSEnabled: p.TLS.Mode == config.TLSEnabled, User: user, AuthSource: source}, nil
 }
 
 // ClientOptions builds driver options for a profile without credentials.

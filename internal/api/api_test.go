@@ -419,7 +419,7 @@ func TestMonitoringIsPassive(t *testing.T) {
 	w := h.do("GET", "/api/v1/monitoring", nil, as("sam", "sres"), withCookie(cookie))
 	m := decode(t, w)
 	secs, _ := m["sections"].(map[string]any)
-	if w.Code != 200 || len(secs) != 5 {
+	if w.Code != 200 || len(secs) != 6 {
 		t.Fatalf("monitoring: %d %v", w.Code, m)
 	}
 	for name, v := range secs {

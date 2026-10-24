@@ -23,9 +23,12 @@ const SSOCookieName = "__Host-mongo_portal_sso"
 type ssoClaims struct {
 	User      string   `json:"u"`
 	Groups    []string `json:"g,omitempty"`
-	Token     string   `json:"t"`
+	Token     string   `json:"t,omitempty"`
 	Validated int64    `json:"val"`
 	Expires   int64    `json:"exp"`
+	// Source is "" (OpenShift) or "oidc"; Provider names the OIDC provider.
+	Source   string `json:"src,omitempty"`
+	Provider string `json:"p,omitempty"`
 }
 
 // Options configures a Resolver.
@@ -52,8 +55,10 @@ type Resolver struct {
 	header    *headerSource
 	dev       *Principal
 	OpenShift *OpenShift
-	sealer    *Sealer
-	now       func() time.Time
+	// OIDC providers in configuration order.
+	OIDC   []*OIDCProvider
+	sealer *Sealer
+	now    func() time.Time
 
 	untrustedOnce sync.Once
 
@@ -89,25 +94,61 @@ func NewResolver(o Options) (*Resolver, error) {
 		r.dev = &Principal{User: o.Config.Dev.User, Groups: slices.Clone(o.Config.Dev.Groups), Source: SourceDev}
 	}
 	r.OpenShift = NewOpenShift(o.Config.OpenShift, o.Logger)
+	for _, pc := range o.Config.OIDC.Providers {
+		r.OIDC = append(r.OIDC, NewOIDCProvider(pc, o.Logger))
+	}
 	return r, nil
+}
+
+// Provider returns the named OIDC provider.
+func (r *Resolver) Provider(name string) *OIDCProvider {
+	for _, p := range r.OIDC {
+		if p.Name() == name {
+			return p
+		}
+	}
+	return nil
+}
+
+// RunProviders runs the background discovery of every SSO source.
+func (r *Resolver) RunProviders(ctx context.Context) {
+	go r.OpenShift.Run(ctx)
+	for _, p := range r.OIDC {
+		go p.Run(ctx)
+	}
 }
 
 // Sources describes which SSO sources can currently be used.
 type Sources struct {
-	OpenShift  Status `json:"openshift"`
-	Header     bool   `json:"header"`
-	Dev        bool   `json:"dev"`
-	RequireSSO bool   `json:"requireSSO"`
+	OpenShift  Status       `json:"openshift"`
+	OIDC       []OIDCSource `json:"oidc"`
+	Header     bool         `json:"header"`
+	Dev        bool         `json:"dev"`
+	RequireSSO bool         `json:"requireSSO"`
+}
+
+// OIDCSource describes one OIDC provider for the login page.
+type OIDCSource struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+	Status      Status `json:"status"`
 }
 
 // Sources returns the current SSO source availability.
 func (r *Resolver) Sources() Sources {
-	return Sources{OpenShift: r.OpenShift.Status(), Header: r.header != nil, Dev: r.dev != nil, RequireSSO: r.opts.Config.RequireSSO}
+	src := Sources{OpenShift: r.OpenShift.Status(), OIDC: []OIDCSource{}, Header: r.header != nil, Dev: r.dev != nil, RequireSSO: r.opts.Config.RequireSSO}
+	for _, p := range r.OIDC {
+		src.OIDC = append(src.OIDC, OIDCSource{Name: p.Name(), DisplayName: p.DisplayName(), Status: p.Status()})
+	}
+	return src
 }
 
 // AnySSO reports whether any SSO source is able to sign users in now.
 func (r *Resolver) AnySSO() bool {
-	return r.header != nil || r.dev != nil || r.OpenShift.Available()
+	if r.header != nil || r.dev != nil || r.OpenShift.Available() {
+		return true
+	}
+	return slices.ContainsFunc(r.OIDC, func(p *OIDCProvider) bool { return p.Available() })
 }
 
 // Resolve returns the request's SSO principal, or nil for anonymous
@@ -137,6 +178,16 @@ func (r *Resolver) Resolve(w http.ResponseWriter, req *http.Request) *Principal 
 	if err := r.sealer.Open(c.Value, &cl, now); err != nil || cl.Expires <= now.Unix() {
 		r.clear(w)
 		return nil
+	}
+	if cl.Source == string(SourceOIDC) {
+		// OIDC sign-ins last until their expiry; a provider removed or
+		// turned off in the configuration ends them.
+		p := r.Provider(cl.Provider)
+		if p == nil || p.Status().State == StateDisabled {
+			r.clear(w)
+			return nil
+		}
+		return &Principal{User: cl.User, Groups: cl.Groups, Source: SourceOIDC, Provider: cl.Provider}
 	}
 	if age := now.Sub(time.Unix(cl.Validated, 0)); age >= r.opts.Config.OpenShift.RevalidateInterval {
 		user, groups, err := r.review(req.Context(), cl.Token)
@@ -189,6 +240,20 @@ func (r *Resolver) SignIn(w http.ResponseWriter, user string, groups []string, t
 		ttl = r.opts.MaxAge
 	}
 	r.set(w, ssoClaims{User: user, Groups: r.keep(groups), Token: token, Validated: now.Unix(), Expires: now.Add(ttl).Unix()})
+}
+
+// SignInOIDC stores a verified OIDC sign-in in the SSO cookie. It lasts
+// for the provider's sessionMaxAge (or the portal maximum), not for the
+// ID token's lifetime: the ID token only proves the sign-in.
+func (r *Resolver) SignInOIDC(w http.ResponseWriter, provider string, id *OIDCIdentity) *Principal {
+	now := r.now()
+	ttl := r.opts.MaxAge
+	if p := r.Provider(provider); p != nil && p.SessionMaxAge() > 0 && p.SessionMaxAge() < ttl {
+		ttl = p.SessionMaxAge()
+	}
+	groups := r.keep(id.Groups)
+	r.set(w, ssoClaims{User: id.User, Groups: groups, Validated: now.Unix(), Expires: now.Add(ttl).Unix(), Source: string(SourceOIDC), Provider: provider})
+	return &Principal{User: id.User, Groups: groups, Source: SourceOIDC, Provider: provider}
 }
 
 // SignOut removes the SSO cookie.

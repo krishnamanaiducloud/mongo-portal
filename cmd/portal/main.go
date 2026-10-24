@@ -31,6 +31,7 @@ import (
 	"github.com/krishnamanaiducloud/mongo-portal/internal/mongoconn"
 	"github.com/krishnamanaiducloud/mongo-portal/internal/rbac"
 	"github.com/krishnamanaiducloud/mongo-portal/internal/session"
+	"github.com/krishnamanaiducloud/mongo-portal/internal/store"
 	"github.com/krishnamanaiducloud/mongo-portal/internal/telemetry"
 	"github.com/krishnamanaiducloud/mongo-portal/internal/webui"
 )
@@ -55,7 +56,7 @@ func main() {
 		return
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()}))
+	logger := slog.New(telemetry.LogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load(*configPath)
@@ -79,13 +80,12 @@ func run(cfg *config.Config, logger *slog.Logger) error {
 
 	// Optional integrations never stop the portal: an unusable tracing
 	// endpoint is reported and tracing stays off.
-	tracing := true
-	shutdownTracing, err := telemetry.Setup(ctx, version)
-	if err != nil {
-		logger.Warn("tracing disabled: the OTLP exporter could not be configured", "error", err.Error())
-		shutdownTracing, tracing = func(context.Context) error { return nil }, false
-	} else if !telemetry.Enabled() {
-		tracing = false
+	shutdownTracing, tracing := telemetry.Setup(ctx, cfg.Telemetry.Tracing, version)
+	switch {
+	case tracing.Enabled:
+		logger.Info("tracing enabled", "protocol", tracing.Protocol, "endpoint", tracing.Endpoint, "tls", tracing.TLS, "sample_ratio", tracing.SampleRatio)
+	case cfg.Telemetry.Tracing.Enabled == config.EnabledTrue || tracing.Source != "":
+		logger.Warn("tracing disabled", "reason", tracing.Reason)
 	}
 	defer func() {
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -143,7 +143,7 @@ func run(cfg *config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("identity: %w", err)
 	}
-	go resolver.OpenShift.Run(ctx)
+	resolver.RunProviders(ctx)
 
 	monitor := mongoconn.NewMonitor(cfg.Profiles, cfg.Monitoring.ProfileHealthInterval, logger)
 	monitorDone := make(chan struct{})
@@ -154,7 +154,26 @@ func run(cfg *config.Config, logger *slog.Logger) error {
 
 	m := metrics.New()
 	m.BuildInfo.WithLabelValues(version, commit, runtime.Version()).Set(1)
-	auditLog := audit.New(logger, cfg.Audit.BufferSize)
+	pod := podName()
+
+	// Optional shared store: durable audit trail and session registry.
+	st := store.New(cfg, logger)
+	if cfg.Store.Enabled {
+		cctx, ccancel := context.WithTimeout(ctx, 30*time.Second)
+		err := st.Connect(cctx)
+		ccancel()
+		if err != nil && cfg.Store.Required {
+			return fmt.Errorf("store: %w", err)
+		}
+		go st.Run(ctx)
+	}
+	auditOpts := audit.Options{Capacity: cfg.Audit.BufferSize, Pod: pod,
+		OnDrop: func(n int) { m.AuditDropped.Add(float64(n)) }}
+	if cfg.Audit.Persist {
+		auditOpts.Sink = st.Audit()
+	}
+	auditLog := audit.NewWithOptions(logger, auditOpts)
+	defer auditLog.Close()
 
 	var srv *api.Server
 	store := session.NewStore(session.Options{
@@ -166,10 +185,26 @@ func run(cfg *config.Config, logger *slog.Logger) error {
 			}
 		},
 	})
-	srv = api.New(api.Deps{
+	deps := api.Deps{
 		Config: cfg, Identity: resolver, RBAC: rbacStore, Monitor: monitor, Store: store, Audit: auditLog, Metrics: m, Logger: logger,
-		CSRFKey: key, UI: webui.Handler(), Build: api.BuildInfo{Version: version, Commit: commit}, TracingEnabled: tracing,
-	})
+		CSRFKey: key, UI: webui.Handler(), Build: api.BuildInfo{Version: version, Commit: commit},
+		TracingEnabled: tracing.Enabled, Tracing: tracing.Map(), Pod: pod,
+	}
+	if cfg.Store.Enabled {
+		deps.StoreStatus = func() map[string]any {
+			s := st.Status()
+			return map[string]any{"state": s.State, "reason": s.Reason, "database": s.Database, "checkedAt": s.CheckedAt}
+		}
+		if cfg.Audit.Persist {
+			deps.AuditChain = st.Audit().Chain
+		}
+		if cfg.Session.Registry {
+			deps.Registry = st.Sessions()
+		}
+	}
+	srv = api.New(deps)
+	go srv.RunRegistry(ctx, cfg.Session.RegistrySyncInterval)
+	go srv.RunJobs(ctx)
 
 	var ready atomic.Bool
 	mainSrv := &http.Server{
@@ -230,6 +265,8 @@ func run(cfg *config.Config, logger *slog.Logger) error {
 	stop() // ends the background probes and closes the monitor clients
 	<-monitorDone
 	_ = opsSrv.Shutdown(sctx)
+	auditLog.Close()
+	st.Close(sctx)
 	logger.Info("shutdown complete")
 	return nil
 }
@@ -326,6 +363,15 @@ func logLevel() slog.Level {
 		return slog.LevelError
 	}
 	return slog.LevelInfo
+}
+
+// podName identifies this replica (the pod name in Kubernetes).
+func podName() string {
+	if v := os.Getenv("POD_NAME"); v != "" {
+		return v
+	}
+	h, _ := os.Hostname()
+	return h
 }
 
 func envOr(k, d string) string {
