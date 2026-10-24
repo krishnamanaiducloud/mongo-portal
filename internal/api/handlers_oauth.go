@@ -132,7 +132,7 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		s.loginRedirect(w, r, "failed")
 		return
 	}
-	http.Redirect(w, r, authURL, http.StatusFound)
+	http.Redirect(w, r, authURL, http.StatusFound) // #nosec G710 -- the configured provider's authorization endpoint
 }
 
 // handleOIDCCallback completes sign-in at an OIDC provider.

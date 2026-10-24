@@ -70,7 +70,7 @@ func (s *Server) mongoIdP(ctx context.Context, p *config.Profile) (*mongoIdP, er
 func mongoOAuth(p *config.Profile, idp *mongoIdP, redirect string) (*oauth2.Config, error) {
 	secret := ""
 	if f := p.OIDC.ClientSecretFile; f != "" {
-		b, err := os.ReadFile(f) // #nosec G304 -- operator supplied secret mount
+		b, err := os.ReadFile(f) // #nosec G304 G703 -- path from the operator's configuration (secret mount), not from requests
 		if err != nil {
 			return nil, errors.New("the MongoDB OIDC client secret cannot be read")
 		}
@@ -115,7 +115,8 @@ func (s *Server) handleMongoOIDCStart(w http.ResponseWriter, r *http.Request) {
 		mongoLoginRedirect(w, r, name, "failed")
 		return
 	}
-	http.Redirect(w, r, oc.AuthCodeURL(st.State, oauth2.S256ChallengeOption(st.Verifier), oidc.Nonce(st.Nonce)), http.StatusFound)
+	// The target is the configured provider's authorization endpoint.
+	http.Redirect(w, r, oc.AuthCodeURL(st.State, oauth2.S256ChallengeOption(st.Verifier), oidc.Nonce(st.Nonce)), http.StatusFound) // #nosec G710 -- endpoint from configured discovery
 }
 
 func (s *Server) handleMongoOIDCCallback(w http.ResponseWriter, r *http.Request) {

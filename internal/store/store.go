@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -197,7 +198,8 @@ func (s *Store) prepare(ctx context.Context, db *mongo.Database) error {
 // audit.retention (create, change with collMod, or drop).
 func (s *Store) retention(ctx context.Context, db *mongo.Database, ac *mongo.Collection) error {
 	const name = "time_ttl"
-	secs := int32(s.audit.Retention / time.Second)
+	// TTL indexes take int32 seconds; longer retention is capped (68 years).
+	secs := int32(min(s.audit.Retention/time.Second, math.MaxInt32)) // #nosec G115 -- bounded by MaxInt32 above
 	cur, err := ac.Indexes().ListSpecifications(ctx)
 	if err != nil {
 		return fmt.Errorf("audit indexes: %s", mongoconn.Classify(err).Msg)

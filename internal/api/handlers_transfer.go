@@ -584,7 +584,9 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request, rc *reqCtx
 	j.cancel = cancel
 	sess, event := rc.sess, s.baseEvent(rc, "import", "", "")
 	event.Database, event.Collection = db, coll
-	go s.runImport(ctx, j, sess, f.Name(), o, event)
+	// The job outlives this request; it is cancelled through the job or
+	// when the user's session ends.
+	go s.runImport(ctx, j, sess, f.Name(), o, event) // #nosec G118 -- intentionally detached from the request context
 	writeJSON(w, http.StatusAccepted, j.snapshot())
 }
 

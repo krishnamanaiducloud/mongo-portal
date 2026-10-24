@@ -183,7 +183,7 @@ func (o *OpenShift) probe(ctx context.Context) (*oauthMeta, *http.Client, Status
 		return unavailable("the OAuth server %s is not reachable from the portal: %s", hostOf(meta.Issuer), shortErr(err))
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 500 {
 		return unavailable("the OAuth server returned HTTP %d", resp.StatusCode)
 	}
