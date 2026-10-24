@@ -21,7 +21,7 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { errorMessage } from '../../api/client';
-import { useCreateIndex, useDropIndex, useIndexes } from '../../api/hooks';
+import { useCreateIndex, useDropIndex, useIndexUsage, useIndexes } from '../../api/hooks';
 import { ConfirmDialog } from '../../components/Dialogs';
 import { JsonField, toExtJSON } from '../../components/JsonField';
 import { canDo } from '../../components/Permission';
@@ -30,7 +30,14 @@ import { ErrorState } from '../StatusPages';
 
 export function IndexesTab({ db, coll }: { db: string; coll: string }) {
   const idx = useIndexes(db, coll);
+  const usage = useIndexUsage(db, coll);
   const drop = useDropIndex(db, coll);
+  // $indexStats reports per member; sum the members the portal sees.
+  const opsOf = (name: string) => {
+    const rows = usage.data?.indexes.filter((u) => u.name === name) ?? [];
+    return rows.length ? rows.reduce((a, u) => a + u.ops, 0) : undefined;
+  };
+  const sinceOf = (name: string) => usage.data?.indexes.find((u) => u.name === name)?.since;
   const [dropping, setDropping] = useState<string>();
   const [creating, setCreating] = useState(false);
   const access = idx.data?.access;
@@ -57,6 +64,7 @@ export function IndexesTab({ db, coll }: { db: string; coll: string }) {
               <Th>Name</Th>
               <Th>Keys</Th>
               <Th>Properties</Th>
+              <Th info={{ tooltip: 'Operations served by the index since the member started or the index was built ($indexStats). Unused indexes cost writes and memory.' }}>Usage</Th>
               <Th screenReaderText="Actions" />
             </Tr>
           </Thead>
@@ -78,6 +86,21 @@ export function IndexesTab({ db, coll }: { db: string; coll: string }) {
                         <Label isCompact title={JSON.stringify(ix.partialFilterExpression)}>partial</Label>
                       )}
                     </LabelGroup>
+                  </Td>
+                  <Td dataLabel="Usage">
+                    {opsOf(name) === undefined ? (
+                      <span className="portal-muted">{usage.isError ? 'needs indexStats' : '—'}</span>
+                    ) : (
+                      <>
+                        {opsOf(name)!.toLocaleString()} ops
+                        {opsOf(name) === 0 && name !== '_id_' && (
+                          <Label isCompact color="orange" className="pf-v6-u-ml-sm">
+                            unused
+                          </Label>
+                        )}
+                        {sinceOf(name) && <div className="portal-muted portal-small">since {new Date(sinceOf(name)!).toLocaleString()}</div>}
+                      </>
+                    )}
                   </Td>
                   <Td isActionCell>
                     {name !== '_id_' && canDo(access, 'dropIndex') && (

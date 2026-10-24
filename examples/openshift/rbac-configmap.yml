@@ -9,6 +9,10 @@
 #   role:mongodb   follow the user's MongoDB privileges (MongoDB decides)
 #   role:readonly  browse, query, shell without writes
 #   role:editor    + document/index changes, create collections
+#   role:dbadmin   + drop collections/databases, admin shell commands, killOp
+#   role:monitoring  monitoring and running operations, no data
+#   role:auditor   + every user's audit events and the session inventory
+#   role:platform-admin  + revoke sessions, settings; no data access
 #   role:admin     everything, incl. other users' audit events
 # Objects: "<db>" or "<db>/<collection>", '*' glob. A user mapped by a "g"
 # line gets exactly the mapped roles; unmapped users get policy.default.

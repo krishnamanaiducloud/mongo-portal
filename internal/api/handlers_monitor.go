@@ -37,7 +37,7 @@ const (
 )
 
 func (s *Server) handleMonitoring(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
-	if !s.authorize(w, r, rc, rbac.Server, rbac.Get, rc.sess.Profile) {
+	if !s.authorize(w, r, rc, rbac.Monitoring, rbac.Get, rc.sess.Profile) {
 		return
 	}
 	type job struct {

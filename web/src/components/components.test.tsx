@@ -125,7 +125,7 @@ describe('login page (passive SSO)', () => {
 
   it('explains an unavailable OpenShift sign-in as a warning, not a failure', () => {
     renderLogin(me({ auth: { ...me().auth, openshift: { state: 'unavailable', reason: 'unreachable' } } }), '/login?sso=unavailable');
-    expect(screen.getByText('OpenShift sign-in is not available right now')).toBeTruthy();
+    expect(screen.getByText('Single sign-on is not available right now')).toBeTruthy();
     expect(screen.getByLabelText('MongoDB login')).toBeTruthy();
   });
 

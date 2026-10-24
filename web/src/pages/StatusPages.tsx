@@ -99,7 +99,7 @@ export function NotFoundPage() {
       <EmptyState titleText="Page not found" headingLevel="h1" icon={SearchIcon}>
         <EmptyStateBody>The page you requested does not exist.</EmptyStateBody>
         <EmptyStateFooter>
-          <NavLink to="/">Back to databases</NavLink>
+          <NavLink to="/databases">Back to databases</NavLink>
         </EmptyStateFooter>
       </EmptyState>
     </PageSection>

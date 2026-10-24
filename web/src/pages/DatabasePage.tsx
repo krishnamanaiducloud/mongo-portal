@@ -46,7 +46,7 @@ export function DatabasePage() {
   return (
     <PageSection>
       <Breadcrumb className="pf-v6-u-mb-md">
-        <BreadcrumbItem render={() => <NavLink to="/">Databases</NavLink>} />
+        <BreadcrumbItem render={() => <NavLink to="/databases">Databases</NavLink>} />
         <BreadcrumbItem isActive>{db}</BreadcrumbItem>
       </Breadcrumb>
       <Flex alignItems={{ default: 'alignItemsCenter' }} className="pf-v6-u-mb-md">

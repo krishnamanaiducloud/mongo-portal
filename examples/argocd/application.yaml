@@ -46,6 +46,8 @@ spec:
       kind: PodDisruptionBudget
     - group: monitoring.coreos.com
       kind: ServiceMonitor
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
   namespaceResourceBlacklist:
     - group: apps
       kind: StatefulSet

@@ -76,6 +76,14 @@ interface Sample {
   bytesIn: number;
   bytesOut: number;
   current: number;
+  cpuUs: number;
+  authFailed: number;
+  evictApp: number;
+  lockWaitUs: number;
+  readUs: number;
+  readOps: number;
+  writeUs: number;
+  writeOps: number;
 }
 
 interface Rates {
@@ -83,14 +91,27 @@ interface Rates {
   bytesIn: number[];
   bytesOut: number[];
   conns: number[];
+  /** CPU time of mongod as percent of one core. */
+  cpu: number[];
+  /** Failed authentications between two polls. */
+  authFailures: number[];
+  /** Pages evicted by application threads per second (cache pressure). */
+  appEvictions: number[];
+  /** Milliseconds spent waiting for the global lock per second. */
+  lockWait: number[];
+  /** Average read and write latency in ms over each interval. */
+  readLatency: number[];
+  writeLatency: number[];
 }
 
-const MAX_SAMPLES = 60;
+// One hour at the default 10 s refresh; long-term history belongs in
+// Prometheus or MongoDB's own monitoring.
+const MAX_SAMPLES = 360;
 
 /** Keeps the recent serverStatus counters and derives per-second rates. */
 function useRates(data: MonitoringInfo | undefined): Rates {
   const samples = useRef<Sample[]>([]);
-  const [rates, setRates] = useState<Rates>({ ops: [], bytesIn: [], bytesOut: [], conns: [] });
+  const [rates, setRates] = useState<Rates>({ ops: [], bytesIn: [], bytesOut: [], conns: [], cpu: [], authFailures: [], appEvictions: [], lockWait: [], readLatency: [], writeLatency: [] });
   const srv = data?.sections.server?.data;
   const at = data?.collectedAt;
   useEffect(() => {
@@ -102,6 +123,14 @@ function useRates(data: MonitoringInfo | undefined): Rates {
       bytesIn: srv.network.bytesIn,
       bytesOut: srv.network.bytesOut,
       current: srv.connections.current,
+      cpuUs: (srv.cpu?.user_time_us ?? 0) + (srv.cpu?.system_time_us ?? 0),
+      authFailed: srv.authentication?.failed ?? 0,
+      evictApp: srv.eviction?.applicationThreadPages ?? 0,
+      lockWaitUs: srv.locks?.globalWaitMicros ?? 0,
+      readUs: srv.latency?.reads.latencyMicros ?? 0,
+      readOps: srv.latency?.reads.ops ?? 0,
+      writeUs: srv.latency?.writes.latencyMicros ?? 0,
+      writeOps: srv.latency?.writes.ops ?? 0,
     };
     let list = samples.current;
     const last = list[list.length - 1];
@@ -110,13 +139,24 @@ function useRates(data: MonitoringInfo | undefined): Rates {
     if (last && (last.host !== s.host || s.ops < last.ops)) list = [];
     list = [...list, s].slice(-MAX_SAMPLES);
     samples.current = list;
-    const r: Rates = { ops: [], bytesIn: [], bytesOut: [], conns: list.map((x) => x.current) };
+    const r: Rates = { ops: [], bytesIn: [], bytesOut: [], conns: list.map((x) => x.current), cpu: [], authFailures: [], appEvictions: [], lockWait: [], readLatency: [], writeLatency: [] };
     for (let i = 1; i < list.length; i++) {
-      const dt = (list[i].t - list[i - 1].t) / 1000;
+      const a = list[i - 1];
+      const b = list[i];
+      const dt = (b.t - a.t) / 1000;
       if (dt <= 0) continue;
-      r.ops.push(Math.max(0, (list[i].ops - list[i - 1].ops) / dt));
-      r.bytesIn.push(Math.max(0, (list[i].bytesIn - list[i - 1].bytesIn) / dt));
-      r.bytesOut.push(Math.max(0, (list[i].bytesOut - list[i - 1].bytesOut) / dt));
+      const d = (x: number, y: number) => Math.max(0, y - x);
+      r.ops.push(d(a.ops, b.ops) / dt);
+      r.bytesIn.push(d(a.bytesIn, b.bytesIn) / dt);
+      r.bytesOut.push(d(a.bytesOut, b.bytesOut) / dt);
+      r.cpu.push((d(a.cpuUs, b.cpuUs) / 1e6 / dt) * 100);
+      r.authFailures.push(d(a.authFailed, b.authFailed));
+      r.appEvictions.push(d(a.evictApp, b.evictApp) / dt);
+      r.lockWait.push(d(a.lockWaitUs, b.lockWaitUs) / 1000 / dt);
+      const ro = d(a.readOps, b.readOps);
+      const wo = d(a.writeOps, b.writeOps);
+      r.readLatency.push(ro > 0 ? d(a.readUs, b.readUs) / ro / 1000 : 0);
+      r.writeLatency.push(wo > 0 ? d(a.writeUs, b.writeUs) / wo / 1000 : 0);
     }
     setRates(r);
   }, [srv, at]);
@@ -295,6 +335,13 @@ function ReplicaSetCard({ data, hello }: { data: MonitoringInfo; hello?: HelloIn
               <FlexItem>{counts.PRIMARY ?? 0} primary</FlexItem>
               <FlexItem>{counts.SECONDARY ?? 0} secondary</FlexItem>
               {counts.ARBITER ? <FlexItem>{counts.ARBITER} arbiter</FlexItem> : null}
+              {rs?.writeMajorityCount ? <FlexItem>write majority {rs.writeMajorityCount}</FlexItem> : null}
+              {rs?.lastElection?.date && (
+                <FlexItem>
+                  last election {new Date(rs.lastElection.date).toLocaleString()}
+                  {rs.lastElection.reason ? ` (${rs.lastElection.reason})` : ''}
+                </FlexItem>
+              )}
             </Flex>
             <Table aria-label="Replica set members" variant="compact">
               <Thead>
@@ -652,6 +699,9 @@ function OperationsCard({ data }: { data: MonitoringInfo }) {
           Active operations <span className="portal-card-sub">· longest running first, excluding this portal</span>
         </CardTitle>
       </CardHeader>
+      <CardBody className="pf-v6-u-pt-0 pf-v6-u-pb-0">
+        <NavLink to="/operations">All operations and idle connections, with filters and killOp →</NavLink>
+      </CardBody>
       <CardBody>
         {c.operations.length === 0 ? (
           <div className="portal-muted">
@@ -771,6 +821,132 @@ const INTERVALS: [string, number | false][] = [
   ['30s', 30_000],
 ];
 
+function PerformanceCard({ srv, rates }: { srv: MonServer; rates: Rates }) {
+  const last = (a: number[]) => (a.length ? a[a.length - 1] : undefined);
+  const avg = (lat?: { latencyMicros: number; ops: number }) => (lat && lat.ops > 0 ? lat.latencyMicros / lat.ops / 1000 : undefined);
+  const items: { label: string; v?: number; fmt: (n: number) => string; series: number[]; sub: string }[] = [
+    { label: 'Read latency', v: last(rates.readLatency), fmt: (n) => `${n.toFixed(2)} ms`, series: rates.readLatency, sub: `since start ${avg(srv.latency?.reads)?.toFixed(2) ?? '—'} ms` },
+    { label: 'Write latency', v: last(rates.writeLatency), fmt: (n) => `${n.toFixed(2)} ms`, series: rates.writeLatency, sub: `since start ${avg(srv.latency?.writes)?.toFixed(2) ?? '—'} ms` },
+    { label: 'CPU (mongod)', v: last(rates.cpu), fmt: (n) => `${n.toFixed(0)}% of a core`, series: rates.cpu, sub: `${fmt(srv.cpu?.page_faults)} page faults since start` },
+    { label: 'Global lock wait', v: last(rates.lockWait), fmt: (n) => `${n.toFixed(1)} ms/s`, series: rates.lockWait, sub: `${fmt(srv.locks?.globalWaitCount)} waits since start` },
+    { label: 'Evictions by app threads', v: last(rates.appEvictions), fmt: (n) => `${fmtRate(n)}/s`, series: rates.appEvictions, sub: 'non-zero means the cache cannot keep up' },
+    { label: 'Failed authentications', v: last(rates.authFailures), fmt: (n) => `${fmt(n)} per refresh`, series: rates.authFailures, sub: `${fmt(srv.authentication?.failed)} since start` },
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Performance <span className="portal-card-sub">· per refresh, this member</span>
+        </CardTitle>
+      </CardHeader>
+      <CardBody>
+        <Grid hasGutter>
+          {items.map((i) => (
+            <GridItem key={i.label} md={6} xl={4}>
+              <div className="portal-stat-label">{i.label}</div>
+              <div className="portal-stat-value portal-stat-value-sm">{i.v !== undefined ? i.fmt(i.v) : '—'}</div>
+              <div className="portal-stat-sub">{i.sub}</div>
+              <Sparkline values={i.series} format={i.fmt} label={i.label} />
+            </GridItem>
+          ))}
+        </Grid>
+        {srv.tickets && (
+          <div className="portal-small portal-muted pf-v6-u-mt-md">
+            Execution tickets: read {fmt(srv.tickets.readOut)} in use / {fmt(srv.tickets.readAvailable)} free · write {fmt(srv.tickets.writeOut)} in use /{' '}
+            {fmt(srv.tickets.writeAvailable)} free
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function OplogCard({ data }: { data: MonitoringInfo }) {
+  const sec = data.sections.oplog;
+  const o = sec?.data;
+  const warn = data.thresholds?.oplogWindowWarningSeconds ?? 86400;
+  return (
+    <Card isFullHeight>
+      <CardHeader>
+        <CardTitle>Oplog</CardTitle>
+      </CardHeader>
+      <CardBody>
+        {o?.available ? (
+          <>
+            <div className="portal-stat-label">Window</div>
+            <div className={`portal-stat-value ${o.windowSeconds !== undefined && o.windowSeconds < warn ? 'portal-status-warning' : ''}`}>
+              {fmtDuration(o.windowSeconds)}
+            </div>
+            <div className="portal-stat-sub">How long a secondary may be offline and still catch up without a full resync.</div>
+            {o.maxSizeBytes ? (
+              <Meter title="Oplog size" value={o.sizeBytes ?? 0} max={o.maxSizeBytes} label={`${formatBytes(o.sizeBytes)} of ${formatBytes(o.maxSizeBytes)}`} warn={101} danger={101} />
+            ) : null}
+            <div className="portal-small portal-muted">
+              {o.first && `first entry ${new Date(o.first).toLocaleString()}`} · {o.last && `last ${new Date(o.last).toLocaleString()}`}
+            </div>
+          </>
+        ) : o && !o.available ? (
+          <div className="portal-muted">No oplog (standalone server).</div>
+        ) : null}
+        <SectionNote s={sec} what="The oplog window" />
+      </CardBody>
+    </Card>
+  );
+}
+
+function StorageStatsCard({ data }: { data: MonitoringInfo }) {
+  const stats = data.sections.databases?.data?.stats ?? [];
+  if (stats.length === 0) return null;
+  const fs = stats.find((s) => s.fsTotalSize > 0);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Database statistics <span className="portal-card-sub">· dbStats of the largest databases</span>
+        </CardTitle>
+      </CardHeader>
+      <CardBody>
+        {fs && (
+          <Meter title="Data volume" value={fs.fsUsedSize} max={fs.fsTotalSize} label={`${formatBytes(fs.fsUsedSize)} used of ${formatBytes(fs.fsTotalSize)}`} warn={80} danger={90} />
+        )}
+        <Table aria-label="Database statistics" variant="compact">
+          <Thead>
+            <Tr>
+              <Th>Database</Th>
+              <Th>Collections</Th>
+              <Th>Documents</Th>
+              <Th>Data size</Th>
+              <Th>Storage</Th>
+              <Th>Indexes</Th>
+            </Tr>
+          </Thead>
+          <Tbody>
+            {stats.map((s) => (
+              <Tr key={s.name}>
+                <Td dataLabel="Database">
+                  <NavLink to={`/db/${encodeURIComponent(s.name)}`}>{s.name}</NavLink>
+                </Td>
+                <Td dataLabel="Collections">{fmt(s.collections)}</Td>
+                <Td dataLabel="Documents">{fmt(s.objects)}</Td>
+                <Td dataLabel="Data size">{formatBytes(s.dataSize)}</Td>
+                <Td dataLabel="Storage">
+                  {formatBytes(s.storageSize)}
+                  {s.dataSize > 0 && <span className="portal-muted portal-small"> · {((s.storageSize / s.dataSize) * 100).toFixed(0)}% of data (compression)</span>}
+                </Td>
+                <Td dataLabel="Indexes">
+                  {formatBytes(s.indexSize)} <span className="portal-muted portal-small">({fmt(s.indexes)})</span>
+                </Td>
+              </Tr>
+            ))}
+          </Tbody>
+        </Table>
+      </CardBody>
+    </Card>
+  );
+}
+
+const alertVariant = { critical: 'danger', warning: 'warning', info: 'info' } as const;
+
 function Ago({ at }: { at: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -853,6 +1029,13 @@ export function MonitoringPage() {
       {q.isError && (
         <Alert variant="warning" isInline isPlain className="pf-v6-u-mb-md" title="The last refresh failed; showing the previous values." />
       )}
+      {(data.alerts ?? []).length > 0 && (
+        <div className="pf-v6-u-mb-md" role="status" aria-label="Alerts">
+          {(data.alerts ?? []).map((a, i) => (
+            <Alert key={i} variant={alertVariant[a.severity]} isInline isPlain title={a.message} />
+          ))}
+        </div>
+      )}
       <Grid hasGutter>
         <GridItem sm={6} xl={3}>
           <StatTile
@@ -901,9 +1084,17 @@ export function MonitoringPage() {
             }
           />
         </GridItem>
-        <GridItem span={12}>
+        <GridItem lg={8}>
           <ReplicaSetCard data={data} hello={hello} />
         </GridItem>
+        <GridItem lg={4}>
+          <OplogCard data={data} />
+        </GridItem>
+        {srv && (
+          <GridItem span={12}>
+            <PerformanceCard srv={srv} rates={rates} />
+          </GridItem>
+        )}
         <GridItem lg={7}>
           <ConnectionsCard data={data} srv={srv} />
         </GridItem>
@@ -921,6 +1112,9 @@ export function MonitoringPage() {
             <OpcountersCard srv={srv} rates={rates} />
           </GridItem>
         )}
+        <GridItem span={12}>
+          <StorageStatsCard data={data} />
+        </GridItem>
       </Grid>
       <MonitoringFootnote />
     </PageSection>

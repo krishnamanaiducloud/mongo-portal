@@ -6,14 +6,28 @@ the signed-in user's **own MongoDB account**.
 * **OpenShift login**: the ServiceAccount is the OAuth client, so no extra
   OAuth setup is needed. It is passive: when OpenShift login is
   unavailable the portal keeps working with MongoDB sign-in, without errors.
-* **Individual MongoDB authentication**: no shared database account. MongoDB
-  enforces each user's own roles.
+* **OpenID Connect sign-in** with Microsoft Entra ID, Okta, Keycloak or any
+  corporate provider (SAML and LDAP through a broker), with PKCE, nonce and
+  full ID token validation.
+* **Individual MongoDB authentication**: no shared database account. SCRAM
+  passwords or **MONGODB-OIDC**, where MongoDB Enterprise receives the user's
+  own token from the identity provider it trusts. MongoDB enforces each
+  user's own roles.
 * **RBAC** with a simple CSV policy in a ConfigMap, mapping OpenShift groups to
   roles. By default the portal follows each user's MongoDB privileges
   (`role:mongodb`); roles such as `role:readonly` can cap a group further.
-* **Monitoring**: replica set members (primary/secondary, lag, health),
-  connections (active, idle, by client), operations, cache, memory and storage
-  sizes, with each user's own MongoDB session.
+* **Monitoring**: replica set members (primary/secondary, lag, health,
+  elections), oplog window, connections (active, idle, by client), latency,
+  CPU, locks, cache and eviction, storage, index usage and alerts with
+  configurable thresholds; running operations with filters and killOp.
+* **Import and export**: Extended JSON, CSV/TSV with field mapping, BSON and
+  gzip, streamed exports, database archives with checksums, background
+  imports with preview, dry run, progress and per-record error reports.
+* **Audit**: every sign-in, change, export and administrative action, with a
+  per-replica hash chain, optional durable store with retention, search and
+  export. **Sessions** of every replica can be listed and revoked.
+* **OpenTelemetry** tracing (OTLP HTTP or gRPC), trace-correlated logs and
+  Prometheus metrics.
 * **In-browser mongosh**: the real mongosh runtime in an isolated sandbox.
   Every operation goes through the portal's checks.
 * TLS and plaintext connection profiles; Chainguard-based production and debug
@@ -38,6 +52,12 @@ replica-set configuration.
 | [configuration.md](docs/configuration.md) | Every configuration key, TLS and non-TLS profiles |
 | [deployment.md](docs/deployment.md) | Step-by-step OpenShift deployment, discovery commands |
 | [oauth.md](docs/oauth.md) | OpenShift login, passive behaviour, troubleshooting |
+| [oidc.md](docs/oidc.md) | OpenID Connect sign-in |
+| [mongodb-oidc.md](docs/mongodb-oidc.md) | MONGODB-OIDC, IAM prerequisites, migration and rollback |
+| [import-export.md](docs/import-export.md) | Import and export |
+| [audit.md](docs/audit.md) | Audit trail |
+| [sessions.md](docs/sessions.md) | Sessions and the session registry |
+| [observability.md](docs/observability.md) | Tracing, logs and metrics |
 | [rbac.md](docs/rbac.md) | RBAC policy format, roles, examples |
 | [mongodb-rbac.md](docs/mongodb-rbac.md) | Creating developer and SRE MongoDB users |
 | [monitoring.md](docs/monitoring.md) | The monitoring page and the clusterMonitor role |

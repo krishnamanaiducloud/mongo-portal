@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, enc, nsPath, setCsrfToken } from './client';
+import { api, enc, nsPath, qs, setCsrfToken } from './client';
 import type {
   Access,
   AuditEvent,
@@ -7,8 +7,14 @@ import type {
   DatabaseInfo,
   DocumentsResponse,
   EJSONDocument,
+  AdminSessions,
+  AuditPage,
+  AuditQuery,
+  IndexUsage,
+  Job,
   Me,
   MonitoringInfo,
+  OperationsPage,
   PermissionsInfo,
   Profile,
   QueryRequest,
@@ -31,6 +37,10 @@ export const keys = {
   indexes: (db: string, coll: string) => ['indexes', db, coll] as const,
   server: ['server'] as const,
   monitoring: ['monitoring'] as const,
+  jobs: ['jobs'] as const,
+  operations: ['operations'] as const,
+  adminSessions: ['adminSessions'] as const,
+  settings: ['settings'] as const,
   audit: (scope: string) => ['audit', scope] as const,
   status: ['status'] as const,
   permissions: ['permissions'] as const,
@@ -328,5 +338,106 @@ export function useAudit(scope: 'self' | 'all') {
     queryKey: keys.audit(scope),
     queryFn: () => api<{ events: AuditEvent[]; scope: string; note: string }>(`/audit?scope=${scope}&limit=300`),
     refetchInterval: 30_000,
+  });
+}
+
+export function useJobs() {
+  return useQuery({
+    queryKey: keys.jobs,
+    queryFn: () => api<{ jobs: Job[]; note: string }>('/jobs'),
+    // Poll while something runs.
+    refetchInterval: (q) => (q.state.data?.jobs.some((j) => j.state === 'queued' || j.state === 'running') ? 1000 : false),
+  });
+}
+
+export function useCancelJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<Job>(`/jobs/${enc(id)}`, { method: 'DELETE' }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.jobs }),
+  });
+}
+
+export interface OperationFilter {
+  state?: 'active' | 'idle' | 'all';
+  client?: string;
+  app?: string;
+  user?: string;
+  ns?: string;
+  op?: string;
+  minSecs?: number;
+  internal?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function useOperations(f: OperationFilter, intervalMs: number | false) {
+  return useQuery({
+    queryKey: [...keys.operations, f],
+    queryFn: () => api<OperationsPage>(`/operations${qs({ ...f })}`),
+    refetchInterval: intervalMs,
+    refetchIntervalInBackground: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useKillOperation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (opid: number | string) =>
+      api<{ killed: boolean; note: string }>('/operations/kill', { method: 'POST', body: { opid, confirm: String(opid) } }),
+    onSettled: () => void qc.invalidateQueries({ queryKey: keys.operations }),
+  });
+}
+
+export function auditQueryString(f: AuditQuery, extra: Record<string, string> = {}) {
+  return qs({ ...f, ...extra });
+}
+
+export function useAuditSearch(f: AuditQuery, before?: { before: string; beforeId: string }) {
+  return useQuery({
+    queryKey: ['audit-search', f, before ?? null],
+    queryFn: () => api<AuditPage>(`/audit${auditQueryString(f, before ?? {})}`),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useAuditVerify(pod: string | undefined) {
+  return useQuery({
+    queryKey: ['audit-verify', pod],
+    queryFn: () => api<{ pod: string; checked: number; intact: boolean; brokenAtSeq?: number; firstSeq?: number; lastSeq?: number }>(`/audit/verify${qs({ pod })}`),
+    enabled: !!pod,
+    retry: false,
+  });
+}
+
+export function useAdminSessions(user: string) {
+  return useQuery({
+    queryKey: [...keys.adminSessions, user],
+    queryFn: () => api<AdminSessions>(`/admin/sessions${qs({ user })}`),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useRevokeSessions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (t: { handle?: string; owner?: string }) => api<{ revoked: number }>('/admin/sessions/revoke', { method: 'POST', body: t }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: keys.adminSessions });
+      void qc.invalidateQueries({ queryKey: keys.sessions });
+    },
+  });
+}
+
+export function useSettings(enabled = true) {
+  return useQuery({ queryKey: keys.settings, queryFn: () => api<Record<string, unknown>>('/settings'), enabled, retry: false });
+}
+
+export function useIndexUsage(db: string, coll: string) {
+  return useQuery({
+    queryKey: ['indexUsage', db, coll],
+    queryFn: () => api<{ indexes: IndexUsage[]; note: string }>(`${nsPath(db, coll)}/index-stats`),
+    retry: false,
   });
 }

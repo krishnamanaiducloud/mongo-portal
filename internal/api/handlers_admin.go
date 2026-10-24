@@ -69,6 +69,9 @@ func (s *Server) RunRegistry(ctx context.Context, every time.Duration) {
 	}
 }
 
+// SyncRegistry runs one registry sync now (tests and shutdown).
+func (s *Server) SyncRegistry(ctx context.Context) { s.syncRegistry(ctx) }
+
 func (s *Server) syncRegistry(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

@@ -9,12 +9,25 @@ server:
     certFile: /etc/tls/private/tls.crt
     keyFile: /etc/tls/private/tls.key
   hsts: true
+  # Set to the Route URL (https://<host>) so OAuth redirect URIs are fixed.
+  # publicOrigin: https://REPLACE-route-host
 identity:
   # Built-in OpenShift login. "auto" offers it whenever the
   # cluster OAuth server is reachable; otherwise users sign in with MongoDB
   # credentials only and nothing fails.
   openshift:
     enabled: auto
+  # OpenID Connect providers (Entra ID, Okta, Keycloak, or a broker in front
+  # of SAML or LDAP). Register the redirect URI
+  # https://<route-host>/oauth/oidc/<name>/callback at the provider.
+  # oidc:
+  #   providers:
+  #     - name: corp
+  #       displayName: Corporate SSO
+  #       issuer: https://REPLACE-issuer
+  #       clientID: REPLACE-client-id
+  #       clientSecretFile: /etc/mongo-portal/oidc/corp-client-secret   # omit for a public client (PKCE)
+  #       groupsClaim: groups
   requireSSO: false
 rbac:
   # Policy and default role come from the mongo-portal-rbac ConfigMap
@@ -24,6 +37,35 @@ session:
   keyFile: /etc/mongo-portal/session/session-key
   idleTimeout: 15m
   absoluteTimeout: 8h
+  # registry: true            # needs store.enabled: sessions of every replica, revocation
+# Shared state for the durable audit trail and the session registry. Use a
+# dedicated MongoDB user with readWrite on the store database only.
+# store:
+#   enabled: true
+#   profile: primary
+#   database: mongo_portal
+#   usernameFile: /etc/mongo-portal/store/username
+#   passwordFile: /etc/mongo-portal/store/password
+# audit:
+#   persist: true
+#   retention: 2160h          # 90 days (TTL index)
+transfer:
+  tempDir: /var/lib/mongo-portal/transfer   # emptyDir for import uploads
+  maxImportBytes: 268435456                 # 256 MiB per file
+monitoring:
+  slowOperation: 5s
+  thresholds:
+    replicationLagWarning: 10s
+    replicationLagCritical: 60s
+    connectionsWarnPercent: 80
+    oplogWindowWarning: 24h
+telemetry:
+  tracing:
+    enabled: auto             # on when an endpoint is set here or in OTEL_EXPORTER_OTLP_ENDPOINT
+    # protocol: grpc
+    # endpoint: https://REPLACE-otel-collector:4317
+    # caFile: /etc/mongo-portal/mongodb-ca/ca.crt
+    # sampleRatio: 0.2
 profiles:
   - name: primary
     displayName: Primary replica set
@@ -32,3 +74,11 @@ profiles:
     defaultAuthSource: admin
     tls:
       mode: disabled
+    # MONGODB-OIDC (MongoDB Enterprise): issuer and clientID must equal the
+    # server's oidcIdentityProviders. Register
+    # https://<route-host>/oauth/mongodb/callback as a redirect URI.
+    # authMechanisms: [SCRAM-SHA-256, MONGODB-OIDC]
+    # oidc:
+    #   issuer: https://REPLACE-issuer
+    #   clientID: REPLACE-mongodb-client-id
+    #   scopes: [openid, offline_access]

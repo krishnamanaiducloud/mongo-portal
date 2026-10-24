@@ -14,8 +14,14 @@ overlays in `examples/kustomize`, Argo CD applications in `examples/argocd`.
 | [configuration.md](configuration.md) | Every configuration key, TLS and non-TLS profiles |
 | [deployment.md](deployment.md) | Step-by-step OpenShift deployment, discovery commands |
 | [oauth.md](oauth.md) | Built-in OpenShift login, passive behaviour, troubleshooting |
+| [oidc.md](oidc.md) | OpenID Connect sign-in (Entra ID, Okta, Keycloak, SAML/LDAP brokers) |
+| [mongodb-oidc.md](mongodb-oidc.md) | MONGODB-OIDC: IAM prerequisites, validating the deployment, migration and rollback |
 | [rbac.md](rbac.md) | RBAC: policy format, roles, examples, where it is enforced |
 | [mongodb-rbac.md](mongodb-rbac.md) | Creating developer and SRE MongoDB users |
+| [import-export.md](import-export.md) | Import and export formats, field mapping, jobs, limits |
+| [audit.md](audit.md) | Audit events, durable store, retention, tamper evidence, export |
+| [sessions.md](sessions.md) | Session security, several replicas, the session registry and revocation |
+| [observability.md](observability.md) | OpenTelemetry tracing, logs, Prometheus metrics |
 | [monitoring.md](monitoring.md) | Monitoring page: replica set members, connections (active/idle), sizes, resources; clusterMonitor |
 | [secrets.md](secrets.md) | Required Secrets and keys (no values) |
 | [gitops.md](gitops.md) | Argo CD setup, scoping, release flow |

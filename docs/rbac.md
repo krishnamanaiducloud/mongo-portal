@@ -7,21 +7,27 @@ can only **narrow** access. It can never grant more than the MongoDB user has.
 ## Policy format
 
 ```csv
-p, <role>, <resource>, <action>, <object>[, allow|deny]
+p, <role>, <resource>, <action>, <object>[, allow|deny[, <profile>]]
 g, <subject>, <role>
 ```
 
 * **Roles** are named `role:<name>`. A `g` line may also make one role inherit
   another (`g, role:team, role:editor`).
 * **Subjects:**
-  * OpenShift user or group names, as given;
+  * OpenShift or OIDC user and group names, as given;
   * `user:<name>` or `group:<name>`, to be explicit;
+  * `idp:<provider>` for every user of an OIDC provider;
   * `mongodb:<user>@<authSource>` or `mongodb:<user>` for MongoDB-only sign-ins
     (when SSO is not used or not available).
 * **Objects** are globs over `<db>` or `<db>/<collection>`: `*` matches any text
   (including `/`), `?` matches one character.
+* **Profile scope** (optional last field): a glob over connection profile
+  names. The rule then applies only to requests in a MongoDB session of a
+  matching profile (`dev-*`, `prod`). Without it a rule applies to every
+  profile. Environments are separate deployments with their own policy
+  ConfigMap (the overlays), so environment scoping is the policy itself.
 * A request is allowed when a rule of the user's roles allows it **and no rule
-  denies it**.
+  denies it**. Everything else is denied.
 
 | Resource | Actions | Object |
 | --- | --- | --- |
@@ -31,7 +37,16 @@ g, <subject>, <role>
 | `indexes` | `get`, `create`, `delete` | `<db>/<coll>` |
 | `shell` | `use`, `admin` (administrative `runCommand`s such as `currentOp`, `killOp`) | `*` / `<db>` |
 | `server` | `get` | profile name |
+| `monitoring` | `get` | profile name |
+| `operations` | `get`, `kill` (killOp) | profile name |
+| `export` | `create` | `<db>/<coll>` or `<db>` (database archive) |
+| `import` | `create` | `<db>/<coll>` |
 | `audit` | `get` | `self` or `all` |
+| `sessions` | `get`, `delete` | `self` or `all` |
+| `settings` | `get` | `*` |
+
+Exports also need `documents get`, imports `documents create` (and
+`documents update` for upserts) on the same namespace.
 
 Creating a database means creating its first collection (`collections:create`).
 
@@ -39,10 +54,18 @@ Creating a database means creating its first collection (`collections:create`).
 
 | Role | Grants |
 | --- | --- |
-| `role:mongodb` | Everything MongoDB allows the user: the portal adds no limit of its own (other users' audit events excepted). The shipped default role |
-| `role:readonly` | Browse and query everything; use the shell; see own audit events |
-| `role:editor` | readonly, plus document changes, index changes and creating collections |
-| `role:admin` | Everything, including dropping collections and databases and seeing all audit events |
+| `role:mongodb` | Everything MongoDB allows the user, including import, export and killOp: the portal adds no limit of its own (portal administration and other users' audit events excepted). The shipped default role |
+| `role:readonly` | Browse, query, export, monitoring; use the shell; own sessions and audit events |
+| `role:editor` | readonly, plus document and index changes, creating collections and import |
+| `role:dbadmin` | editor, plus dropping collections and databases, administrative shell commands and killOp |
+| `role:monitoring` | Monitoring and running operations only, no data |
+| `role:auditor` | monitoring, plus every user's audit events and the session inventory, no data |
+| `role:platform-admin` | auditor, plus revoking sessions and the settings page; **no data access** |
+| `role:admin` | Everything (break-glass): data, portal administration and every audit event |
+
+Portal administration and database administration are separate:
+`role:platform-admin` cannot read data, `role:dbadmin` cannot administer the
+portal. MongoDB privileges still apply to every data operation of every role.
 
 Policies may add rules to the built-in roles or define their own.
 
@@ -97,6 +120,16 @@ g, mongodb:sre-alice@admin, role:admin
 
 # Hide a sensitive database entirely from developers
 p, role:readonly, databases, get, hr, deny
+
+# Developers may write only in dev profiles; production stays read-only
+p, role:dev-writer, documents, *, *, allow, dev-*
+g, mongo-portal-developers, role:readonly
+g, mongo-portal-developers, role:dev-writer
+
+# Every Entra ID user may browse; operators may end operations
+g, idp:corp, role:readonly
+g, mongo-ops, role:monitoring
+p, role:monitoring, operations, kill, *, allow
 ```
 
 ## Where it is enforced
@@ -110,6 +143,11 @@ p, role:readonly, databases, get, hr, deny
   `query.allowWriteStages` must be enabled.
 * **The shell:** every mongosh operation maps to a resource and action on its
   namespace. Administrative `runCommand`s need `shell admin`.
+* **Import, export, operations, monitoring, sessions and settings** check
+  their resource; killOp additionally needs MongoDB's `killop` privilege for
+  other users' operations.
+* **Every denial is audited** (`rbac_denied`) and counted in
+  `mongo_portal_authorization_denials_total`.
 * **The UI** offers an action only when both RBAC and the user's MongoDB
   privileges allow it. **My permissions** shows the user's roles and rules, and a
   live **Check access** tool that asks the server.

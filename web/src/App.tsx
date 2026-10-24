@@ -17,6 +17,11 @@ import { MonitoringPage } from './pages/MonitoringPage';
 import { ShellPage } from './pages/ShellPage';
 import { PermissionsPage } from './pages/PermissionsPage';
 import { SystemStatusPage } from './pages/SystemStatusPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { TransferPage } from './pages/TransferPage';
+import { OperationsPage } from './pages/OperationsPage';
+import { AdminSessionsPage } from './pages/AdminSessionsPage';
+import { SettingsPage } from './pages/SettingsPage';
 
 function Loading() {
   return (
@@ -58,7 +63,12 @@ export function App() {
       <Route path="/login" element={<LoginPage me={me.data} />} />
       <Route element={<RequireSession me={me.data} />}>
         <Route element={<AppLayout me={me.data} />}>
-          <Route index element={<DatabasesPage me={me.data} />} />
+          <Route index element={<DashboardPage me={me.data} />} />
+          <Route path="databases" element={<DatabasesPage me={me.data} />} />
+          <Route path="transfer" element={<TransferPage me={me.data} />} />
+          <Route path="operations" element={<OperationsPage />} />
+          <Route path="admin/sessions" element={<AdminSessionsPage />} />
+          <Route path="settings" element={<SettingsPage />} />
           <Route path="db/:db" element={<DatabasePage />} />
           <Route path="db/:db/:coll" element={<CollectionPage />} />
           <Route path="session" element={<SessionPage me={me.data} />} />

@@ -93,6 +93,15 @@ export function SystemStatusPage() {
                     <OnOff on={s.auth.mongodbLogin} onText="Allowed" offText="Disabled (SSO required)" />
                   </DescriptionListDescription>
                 </DescriptionListGroup>
+                {(s.auth.oidc ?? []).map((o) => (
+                  <DescriptionListGroup key={o.name}>
+                    <DescriptionListTerm>{o.displayName}</DescriptionListTerm>
+                    <DescriptionListDescription>
+                      <OpenShiftStateLabel s={{ state: o.state, reason: o.reason }} />
+                      {o.reason && <div className="portal-muted portal-small">{o.reason}</div>}
+                    </DescriptionListDescription>
+                  </DescriptionListGroup>
+                ))}
                 {s.auth.header && (
                   <DescriptionListGroup>
                     <DescriptionListTerm>SSO proxy headers</DescriptionListTerm>
@@ -129,6 +138,34 @@ export function SystemStatusPage() {
                     <DescriptionListTerm>Sessions on this instance</DescriptionListTerm>
                     <DescriptionListDescription>
                       {s.sessions.active} of {s.sessions.max}
+                      {s.pod ? ` · ${s.pod}` : ''}
+                      {s.sessions.registry ? ' · shared registry' : ''}
+                    </DescriptionListDescription>
+                  </DescriptionListGroup>
+                )}
+                {s.store && (
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>Shared store</DescriptionListTerm>
+                    <DescriptionListDescription>
+                      <OnOff on={s.store.state === 'connected'} onText={`Connected${s.store.database ? ` (${s.store.database})` : ''}`} offText={s.store.state === 'disabled' ? 'Not configured' : 'Unavailable'} />
+                      {s.store.reason && <div className="portal-muted portal-small">{s.store.reason}</div>}
+                    </DescriptionListDescription>
+                  </DescriptionListGroup>
+                )}
+                {s.audit && (
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>Audit trail</DescriptionListTerm>
+                    <DescriptionListDescription>
+                      {s.audit.persistent ? `Log stream and store (${s.audit.written} written${s.audit.dropped ? `, ${s.audit.dropped} not persisted` : ''})` : 'Log stream'}
+                      {s.audit.lastError && <div className="portal-status-warning portal-small">{s.audit.lastError}</div>}
+                    </DescriptionListDescription>
+                  </DescriptionListGroup>
+                )}
+                {s.transfer !== undefined && (
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>Import &amp; export</DescriptionListTerm>
+                    <DescriptionListDescription>
+                      <OnOff on={s.transfer} />
                     </DescriptionListDescription>
                   </DescriptionListGroup>
                 )}
@@ -145,6 +182,12 @@ export function SystemStatusPage() {
                     <DescriptionListTerm>Tracing (OTLP)</DescriptionListTerm>
                     <DescriptionListDescription>
                       <OnOff on={s.tracing} offText="Not configured" />
+                      {s.tracingDetail?.endpoint && (
+                        <div className="portal-muted portal-small">
+                          {s.tracingDetail.protocol} · {s.tracingDetail.endpoint} · {s.tracingDetail.tls ? 'TLS' : 'plaintext'} · sampling {Math.round(s.tracingDetail.sampleRatio * 100)}%
+                        </div>
+                      )}
+                      {s.tracingDetail?.reason && !s.tracing && <div className="portal-muted portal-small">{s.tracingDetail.reason}</div>}
                     </DescriptionListDescription>
                   </DescriptionListGroup>
                 )}

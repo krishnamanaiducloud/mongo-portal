@@ -8,8 +8,13 @@
 # create, delete), shell (use, admin), server (get), audit (get; object
 # "self" or "all"). Objects are globs over "<db>" or "<db>/<collection>".
 # Built-in roles: role:mongodb (follow the user's MongoDB privileges; the
-# default for unmapped users), role:readonly, role:editor, role:admin. A user
-# mapped by a "g" line gets exactly the mapped roles.
+# default for unmapped users), role:readonly, role:editor, role:dbadmin,
+# role:monitoring, role:auditor, role:platform-admin (portal administration
+# without data access) and role:admin (everything). A user mapped by a "g"
+# line gets exactly the mapped roles. Further resources: export, import
+# (create), monitoring (get), operations (get, kill), sessions (get, delete;
+# object self or all), settings (get). An optional seventh field limits a
+# rule to connection profiles: p, role:x, documents, *, *, allow, dev-*
 #
 # Subjects: OpenShift user or group names, or
 # "mongodb:<user>@<authSource>" for MongoDB-only sign-ins, which are used

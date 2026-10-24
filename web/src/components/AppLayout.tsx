@@ -38,9 +38,15 @@ import {
 import {
   BarsIcon,
   ClipboardCheckIcon,
+  CogIcon,
   CubeIcon,
+  CubesIcon,
   DatabaseIcon,
+  ExchangeAltIcon,
   HistoryIcon,
+  HomeIcon,
+  ListIcon,
+  UsersIcon,
   KeyboardIcon,
   LockIcon,
   MoonIcon,
@@ -271,7 +277,7 @@ export function AppLayout({ me }: { me: Me }) {
   const sidebar = (
     <PageSidebar isSidebarOpen={sidebarOpen}>
       <PageSidebarBody>
-        <Sidebar />
+        <Sidebar me={me} />
       </PageSidebarBody>
     </PageSidebar>
   );
@@ -306,8 +312,9 @@ export function AppLayout({ me }: { me: Me }) {
   );
 }
 
-function Sidebar() {
+function Sidebar({ me }: { me: Me }) {
   const [filter, setFilter] = useState('');
+  const perm = (k: string) => me.permissions[k] !== false;
   const { db: activeDb, coll: activeColl } = useParams();
   const dbs = useDatabases();
   const colls = useCollections(activeDb);
@@ -328,6 +335,16 @@ function Sidebar() {
         />
       </div>
       <Nav aria-label="Database navigation">
+        <NavList>
+          <NavItem icon={<HomeIcon />}>
+            <NavLink to="/" end>
+              Dashboard
+            </NavLink>
+          </NavItem>
+          <NavItem icon={<ListIcon />}>
+            <NavLink to="/databases">All databases</NavLink>
+          </NavItem>
+        </NavList>
         <NavGroup title="Databases">
           {dbs.isPending && <Spinner size="md" className="pf-v6-u-ml-md" aria-label="Loading databases" />}
           <NavList>
@@ -351,26 +368,60 @@ function Sidebar() {
           </NavGroup>
         )}
         <Divider />
-        <NavList>
-          <NavItem icon={<TerminalIcon />}>
-            <NavLink to={activeDb ? `/shell?db=${encodeURIComponent(activeDb)}` : '/shell'}>Shell</NavLink>
-          </NavItem>
-          <NavItem icon={<ServerIcon />}>
-            <NavLink to="/monitoring">Monitoring</NavLink>
-          </NavItem>
-          <NavItem icon={<ClipboardCheckIcon />}>
-            <NavLink to="/permissions">My permissions</NavLink>
-          </NavItem>
-          <NavItem icon={<TachometerAltIcon />}>
-            <NavLink to="/status">System status</NavLink>
-          </NavItem>
-          <NavItem icon={<LockIcon />}>
-            <NavLink to="/session">Session &amp; security</NavLink>
-          </NavItem>
-          <NavItem icon={<HistoryIcon />}>
-            <NavLink to="/audit">Audit activity</NavLink>
-          </NavItem>
-        </NavList>
+        <NavGroup title="Work">
+          <NavList>
+            <NavItem icon={<TerminalIcon />}>
+              <NavLink to={activeDb ? `/shell?db=${encodeURIComponent(activeDb)}` : '/shell'}>Shell</NavLink>
+            </NavItem>
+            {(perm('export:create') || perm('import:create')) && (
+              <NavItem icon={<ExchangeAltIcon />}>
+                <NavLink to={activeDb ? `/transfer?db=${encodeURIComponent(activeDb)}${activeColl ? `&coll=${encodeURIComponent(activeColl)}` : ''}` : '/transfer'}>
+                  Import &amp; export
+                </NavLink>
+              </NavItem>
+            )}
+          </NavList>
+        </NavGroup>
+        <NavGroup title="Operate">
+          <NavList>
+            {perm('monitoring:get') && (
+              <NavItem icon={<ServerIcon />}>
+                <NavLink to="/monitoring">Monitoring</NavLink>
+              </NavItem>
+            )}
+            {perm('operations:get') && (
+              <NavItem icon={<CubesIcon />}>
+                <NavLink to="/operations">Operations</NavLink>
+              </NavItem>
+            )}
+            <NavItem icon={<HistoryIcon />}>
+              <NavLink to="/audit">Audit</NavLink>
+            </NavItem>
+            {me.permissions['sessions:all'] && (
+              <NavItem icon={<UsersIcon />}>
+                <NavLink to="/admin/sessions">Sessions</NavLink>
+              </NavItem>
+            )}
+          </NavList>
+        </NavGroup>
+        <NavGroup title="Security">
+          <NavList>
+            <NavItem icon={<LockIcon />}>
+              <NavLink to="/session">My session</NavLink>
+            </NavItem>
+            <NavItem icon={<ClipboardCheckIcon />}>
+              <NavLink to="/permissions">My permissions</NavLink>
+            </NavItem>
+            {me.permissions['settings:get'] && (
+              <NavItem icon={<CogIcon />}>
+                <NavLink to="/settings">Settings</NavLink>
+              </NavItem>
+            )}
+            <NavItem icon={<TachometerAltIcon />}>
+              <NavLink to="/status">System status</NavLink>
+            </NavItem>
+          </NavList>
+        </NavGroup>
       </Nav>
     </>
   );

@@ -15,6 +15,7 @@ import type { IdentitySource, OpenShiftStatus, ProfileHealth } from '../api/type
 
 const sourceText: Record<IdentitySource, string> = {
   openshift: 'Signed in with OpenShift',
+  oidc: 'Signed in with corporate single sign-on',
   header: 'Signed in through the corporate SSO proxy',
   dev: 'Local development identity',
   mongodb: 'Signed in with MongoDB credentials only',

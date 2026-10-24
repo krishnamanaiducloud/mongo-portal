@@ -49,6 +49,14 @@ Browser ↔ OpenShift OAuth server (user sign-in at the IdP).
 | **Elevation**: container escape | Non-root arbitrary UID, read-only rootfs, all capabilities dropped, no privilege escalation, RuntimeDefault seccomp, restricted-v2 SCC, no shell/package manager in production image | smoke test, manifest checks |
 | Lateral movement | NetworkPolicies: ingress only router + monitoring; egress DNS, MongoDB pods, API/OAuth (443/6443); ServiceAccount without permissions | manifest review (cluster test pending) |
 | Supply chain | Base images pinned by digest (Chainguard), lockfiles, `go mod verify`, `npm ci --ignore-scripts`, mongosh checksum-pinned, SBOMs, vulnerability scans, Dependabot | security scan reports |
+| OIDC token forgery or substitution (portal sign-in) | ID token signature checked against JWKS, exact issuer, audience = client id, `azp` with several audiences, expiry, nonce bound to the sign-in, PKCE, single-use state | `oidc_test` (audience, expired, nonce, wrong key, issuer mismatch, forged state) |
+| MONGODB-OIDC token sent to the wrong server | The driver's IdP info from the server must match the profile's issuer and client id before a token is released; `ALLOWED_HOSTS` restricts hosts; TLS required in production | `TestMongoDBOIDCProviderMismatch`, `test/oidc TestMongoDBOIDCRefusals` |
+| MONGODB-OIDC token theft | Tokens only in the memory of the session's replica; never in cookies, logs, audit or the store; refresh tokens likewise | code review, smoke test "password not in logs" |
+| Data exfiltration through export | `export create` and `documents get` on the namespace, MongoDB privileges, document limit, every export audited with count | `TestImportRulesAndAuthorization`, `TestExportImportRoundTrip` |
+| Malicious import files | Size limit, record size limit, strict parsing, unordered inserts with per-record errors, validators apply, no `system.*` targets, `$`-prefixed mapping targets refused | `transfer_test`, `TestImportRulesAndAuthorization` |
+| Ending other users' work (killOp) | `operations kill` RBAC, MongoDB `killop` privilege, typed confirmation, only running client operations, audited | `TestOperationsAndKill` |
+| Audit tampering or loss | Per-replica hash chain with sequence numbers and verification; log stream always written; store failures counted and shown | `TestAuditSearchExportAndScope`, `TestSharedStoreAuditAndRegistry` |
+| Session revocation bypass | Revocation in the shared registry closes the session on its replica at the next sync | `TestSharedStoreAuditAndRegistry` |
 
 ## Residual risks
 
@@ -80,3 +88,10 @@ Browser ↔ OpenShift OAuth server (user sign-in at the IdP).
 10. The OpenShift access token is kept (encrypted) in a browser cookie for
     revalidation. It has scope `user:info` only. Signing out removes the cookie
     but does not revoke the token at the OAuth server; it expires with its lifetime.
+11. OIDC sign-ins last until `sessionMaxAge` and are not re-checked at the
+    provider; disabling a user at the provider takes effect at the next
+    sign-in. Revoke their MongoDB sessions (Sessions page) and remove them from
+    the RBAC policy for immediate effect.
+12. The store account can rewrite stored audit events. The hash chain makes
+    this evident, not impossible; use write-once log storage for proof.
+13. Revocation takes effect within `session.registrySyncInterval` (10 s).

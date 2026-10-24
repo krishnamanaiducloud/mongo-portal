@@ -57,12 +57,38 @@ const reasons: Record<string, string> = {
 
 const ssoMessages: Record<string, { title: string; body: string }> = {
   unavailable: {
-    title: 'OpenShift sign-in is not available right now',
-    body: 'The OpenShift OAuth server could not be reached from the portal. You can still connect with your MongoDB credentials.',
+    title: 'Single sign-on is not available right now',
+    body: 'The identity provider could not be reached from the portal. You can still connect with your MongoDB credentials.',
   },
-  failed: { title: 'OpenShift sign-in did not complete', body: 'Try again, or connect with your MongoDB credentials.' },
-  denied: { title: 'OpenShift sign-in was cancelled', body: 'Access was not granted at the OpenShift login page.' },
-  expired: { title: 'The OpenShift sign-in took too long', body: 'Start the sign-in again.' },
+  failed: { title: 'Sign-in did not complete', body: 'Try again, or connect with your MongoDB credentials.' },
+  denied: { title: 'Sign-in was cancelled', body: 'Access was not granted at the identity provider.' },
+  expired: { title: 'The sign-in took too long', body: 'Start the sign-in again.' },
+  issuer_mismatch: {
+    title: 'The identity provider reports a different issuer',
+    body: 'The portal is configured for another issuer URL than the provider announces. Ask the platform team to check identity.oidc.providers[].issuer.',
+  },
+  audience_mismatch: {
+    title: 'The sign-in token was issued for another application',
+    body: 'The ID token audience is not the portal client id. Ask the identity team to check the client registration.',
+  },
+  token_expired: { title: 'The sign-in token had already expired', body: 'Check that the clocks of the portal and the identity provider agree, then try again.' },
+  not_in_group: { title: 'You are not in a group allowed to use this portal', body: 'Ask for membership in one of the portal groups.' },
+  unknown_provider: { title: 'Unknown sign-in provider', body: 'Use one of the sign-in options below.' },
+};
+
+const mongoMessages: Record<string, string> = {
+  oidc_not_offered: 'This connection profile does not offer MongoDB OIDC sign-in.',
+  sso_required: 'Sign in with single sign-on first, then connect to MongoDB.',
+  idp_unavailable: "The identity provider of this MongoDB deployment is not reachable from the portal.",
+  expired: 'The MongoDB OIDC sign-in took too long. Start it again.',
+  denied: 'Access was not granted at the identity provider.',
+  failed: 'The MongoDB OIDC sign-in did not complete. Try again.',
+  mongo_rejected: 'MongoDB rejected your OIDC identity. Ask a database administrator to map your identity to a MongoDB user or role.',
+  mongo_oidc_failed:
+    'MongoDB and this connection profile disagree about the identity provider, or MONGODB-OIDC is not enabled on the server. Ask the platform team to compare the profile with the server configuration.',
+  mongo_unavailable: 'MongoDB did not respond. It may be down or unreachable from the portal.',
+  tls_verification_failed: 'The MongoDB server certificate could not be verified against the configured CA.',
+  rate_limited: 'Too many login attempts; try again later.',
 };
 
 function startURL(base: string, from: string | undefined) {
@@ -78,10 +104,12 @@ export function LoginPage({ me }: { me: Me }) {
   const from = (location.state as { from?: string } | null)?.from;
   const auth = me.auth;
   const osAvailable = auth.openshift.state === 'available';
+  const oidc = (auth.oidc ?? []).filter((o) => o.state === 'available');
+  const anySSO = osAvailable || oidc.length > 0;
   const ssoRequiredButMissing = auth.requireSSO && !me.sso;
   // MongoDB credentials are asked for after SSO, or directly when SSO is not used.
   const [mongoOnly, setMongoOnly] = useState(false);
-  const showMongoForm = me.sso || (auth.mongodbLogin && (!osAvailable || mongoOnly));
+  const showMongoForm = me.sso || (auth.mongodbLogin && (!anySSO || mongoOnly));
 
   if (me.hasSession && !params.get('reason')) {
     return <Navigate to={from && from !== '/login' ? from : '/'} replace />;
@@ -89,6 +117,7 @@ export function LoginPage({ me }: { me: Me }) {
 
   const reason = params.get('reason');
   const sso = params.get('sso');
+  const mongo = params.get('mongo');
   const doSignOut = async () => {
     try {
       const r = await signOut.mutateAsync();
@@ -150,6 +179,11 @@ export function LoginPage({ me }: { me: Me }) {
                 {auth.mongodbLogin ? ssoMessages[sso].body : 'Try again in a moment.'}
               </Alert>
             )}
+            {mongo && (
+              <Alert className="pf-v6-u-mb-md" variant="warning" isInline title="MongoDB OIDC sign-in did not complete">
+                {mongoMessages[mongo] ?? 'Try again, or connect with a username and password where the profile allows it.'}
+              </Alert>
+            )}
 
             {me.sso ? (
               <div className="portal-login-identity">
@@ -181,14 +215,37 @@ export function LoginPage({ me }: { me: Me }) {
                     Log in with OpenShift
                   </Button>
                 )}
-                {ssoRequiredButMissing && !osAvailable && (
+                {oidc.map((o) => (
+                  <Button
+                    key={o.name}
+                    variant={osAvailable ? 'secondary' : 'primary'}
+                    size="lg"
+                    isBlock
+                    icon={<KeyIcon />}
+                    component="a"
+                    href={startURL(o.url, from)}
+                    className="portal-sso-button pf-v6-u-mt-sm"
+                  >
+                    Sign in with {o.displayName}
+                  </Button>
+                ))}
+                {(auth.oidc ?? [])
+                  .filter((o) => o.state !== 'available')
+                  .map((o) => (
+                    <HelperText key={o.name} className="pf-v6-u-mt-sm">
+                      <HelperTextItem variant="indeterminate">
+                        {o.displayName} is not available right now{o.reason ? ` (${o.reason})` : ''}.
+                      </HelperTextItem>
+                    </HelperText>
+                  ))}
+                {ssoRequiredButMissing && !anySSO && (
                   <Alert variant="info" isInline title="Single sign-on is required">
                     This portal accepts only single sign-on, which is not available right now
                     {auth.openshift.reason ? ` (${auth.openshift.reason})` : ''}. It is checked again automatically; reload the page in a
                     moment.
                   </Alert>
                 )}
-                {osAvailable && auth.mongodbLogin && !mongoOnly && (
+                {anySSO && auth.mongodbLogin && !mongoOnly && (
                   <div className="portal-login-alt">
                     <Divider className="pf-v6-u-my-md" />
                     <Button variant="link" icon={<DatabaseIcon />} onClick={() => setMongoOnly(true)}>
@@ -227,6 +284,10 @@ function MongoLoginForm({ me, from }: { me: Me; from?: string }) {
 
   const profile: Profile | undefined = profiles.data?.find((p) => p.name === selected) ?? profiles.data?.[0];
   const authSource = authSourceEdit ?? profile?.defaultAuthSource ?? '';
+  const passwordMechanisms = (profile?.authMechanisms ?? []).filter((m) => m !== 'MONGODB-OIDC');
+  // Hide the password form only for a profile known to offer OIDC alone.
+  const passwordLogin = !profile || passwordMechanisms.length > 0;
+  const ret = from && from.startsWith('/') && !from.startsWith('//') && from !== '/login' ? from : '/';
 
   const select = (p: Profile) => {
     setSelected(p.name);
@@ -310,6 +371,25 @@ function MongoLoginForm({ me, from }: { me: Me; from?: string }) {
         </Alert>
       )}
 
+      {profile?.oidc && (
+        <div className="pf-v6-u-mt-lg">
+          <Button
+            variant="primary"
+            isBlock
+            icon={<KeyIcon />}
+            component="a"
+            href={`${profile.oidc.url}?return=${encodeURIComponent(ret)}`}
+            onClick={() => rememberProfile(profile.name)}
+          >
+            Connect with {profile.oidc.displayName} (MongoDB OIDC)
+          </Button>
+          <Content component="small" className="pf-v6-u-display-block pf-v6-u-mt-xs">
+            Signs you in at the identity provider this MongoDB deployment trusts; MongoDB receives your own token, no password.
+          </Content>
+          {passwordLogin && <Divider className="pf-v6-u-my-md" />}
+        </div>
+      )}
+      {passwordLogin && (
       <Form className="pf-v6-u-mt-lg" onSubmit={(e) => void submit(e)} aria-label="MongoDB login">
         <FormGroup label="MongoDB username" isRequired fieldId="username">
           <TextInput id="username" value={username} onChange={(_e, v) => setUsername(v)} isRequired autoComplete="username" autoFocus />
@@ -352,7 +432,7 @@ function MongoLoginForm({ me, from }: { me: Me; from?: string }) {
           <FormGroup label="Authentication mechanism" fieldId="mechanism" className="pf-v6-u-mt-md">
             <FormSelect id="mechanism" value={mechanism} onChange={(_e, v) => setMechanism(v)}>
               <FormSelectOption value="" label="Negotiate (recommended)" />
-              {profile?.authMechanisms.map((m) => <FormSelectOption key={m} value={m} label={m} />)}
+              {passwordMechanisms.map((m) => <FormSelectOption key={m} value={m} label={m} />)}
             </FormSelect>
           </FormGroup>
         </ExpandableSection>
@@ -372,6 +452,7 @@ function MongoLoginForm({ me, from }: { me: Me; from?: string }) {
           </Button>
         </ActionGroup>
       </Form>
+      )}
     </>
   );
 }

@@ -95,3 +95,44 @@ export const enc = encodeURIComponent;
 export function nsPath(db: string, coll?: string): string {
   return coll === undefined ? `/databases/${enc(db)}` : `/databases/${enc(db)}/collections/${enc(coll)}`;
 }
+
+/** POSTs a file body (import uploads and previews) with the CSRF token. */
+export async function upload<T>(path: string, body: Blob, signal?: AbortSignal): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/v1${path}`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/octet-stream', 'X-CSRF-Token': csrfToken },
+      credentials: 'same-origin',
+      redirect: 'manual',
+      body,
+      signal,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw new ApiError(0, 'network_error', 'The upload did not reach the portal. Check your connection.');
+  }
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+  if (!res.ok) {
+    const err = (data as { error?: { code?: string; message?: string; requestId?: string } }).error;
+    const apiErr = new ApiError(res.status, err?.code ?? `http_${res.status}`, err?.message ?? res.statusText, err?.requestId);
+    if (isSessionError(apiErr)) window.dispatchEvent(new CustomEvent(SESSION_LOST_EVENT, { detail: apiErr.code }));
+    throw apiErr;
+  }
+  return data as T;
+}
+
+/** Builds a query string, skipping empty values. */
+export function qs(params: Record<string, string | number | boolean | undefined | null>): string {
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '' && v !== false) u.set(k, String(v));
+  }
+  const s = u.toString();
+  return s ? `?${s}` : '';
+}

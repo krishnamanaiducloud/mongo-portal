@@ -756,11 +756,10 @@ func (s *Server) writeBatch(ctx context.Context, c *mongo.Collection, j *Job, ba
 		for i := range batch {
 			docs[i] = batch[i]
 		}
-		var res *mongo.InsertManyResult
-		res, err = c.InsertMany(octx, docs, options.InsertMany().SetOrdered(false))
-		if res != nil {
+		_, err = c.InsertMany(octx, docs, options.InsertMany().SetOrdered(false))
+		if err == nil {
 			j.mu.Lock()
-			j.v.Inserted += int64(len(res.InsertedIDs))
+			j.v.Inserted += int64(len(batch))
 			j.mu.Unlock()
 		}
 	}

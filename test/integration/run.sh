@@ -74,6 +74,8 @@ a.createUser({user:"reader", pwd:"reader-pw", roles:[{role:"read", db:"app"}], m
 a.createUser({user:"writer", pwd:"writer-pw", roles:[{role:"readWrite", db:"app"},{role:"dbAdmin", db:"app"},{role:"readWrite", db:"scratch"},{role:"dbAdmin", db:"scratch"}]});
 a.createUser({user:"legacy", pwd:"legacy-pw", roles:[{role:"read", db:"app"}], mechanisms:["SCRAM-SHA-1"]});
 a.createUser({user:"monitor", pwd:"monitor-pw", roles:[{role:"clusterMonitor", db:"admin"},{role:"read", db:"app"}]});
+a.createUser({user:"opsadmin", pwd:"opsadmin-pw", roles:[{role:"clusterMonitor", db:"admin"},{role:"hostManager", db:"admin"}]});
+a.createUser({user:"portalstore", pwd:"portalstore-pw", roles:[{role:"readWrite", db:"mongo_portal"}]});
 db.getSiblingDB("app").createUser({user:"appuser", pwd:"appuser-pw", roles:[{role:"read", db:"app"}]});
 const app = a.getSiblingDB("app");
 app.orders.insertMany([

@@ -19,6 +19,8 @@ data:
         certFile: /etc/tls/private/tls.crt
         keyFile: /etc/tls/private/tls.key
       hsts: true
+      # The Route URL; fixes OAuth redirect URIs (recommended with any SSO).
+      # publicOrigin: https://REPLACE-route-host
     identity:
       # "Log in with OpenShift" whenever the cluster OAuth server is reachable;
       # otherwise users sign in with their own MongoDB credentials only.
@@ -28,6 +30,16 @@ data:
       requireSSO: false
       # Optional: identity-provider logout page opened after "Sign out".
       # ssoLogoutURL: https://REPLACE-idp/logout
+      # Optional OpenID Connect sign-in (Entra ID, Okta, Keycloak, a SAML or
+      # LDAP broker). Redirect URI: https://<route-host>/oauth/oidc/<name>/callback
+      # oidc:
+      #   providers:
+      #     - name: corp
+      #       displayName: Corporate SSO
+      #       issuer: https://REPLACE-issuer
+      #       clientID: REPLACE-client-id
+      #       clientSecretFile: /etc/mongo-portal/oidc/corp-client-secret
+      #       groupsClaim: groups
     rbac:
       # Groups and roles come from the mongo-portal-rbac ConfigMap
       # (rbac-configmap.yml), re-read every 30s.
@@ -38,6 +50,23 @@ data:
       absoluteTimeout: 8h
       maxPerUser: 3
       maxTotal: 200
+      # registry: true      # sessions of every replica and revocation (needs store)
+    # Optional shared state: durable, searchable audit and the session
+    # registry. A dedicated MongoDB user with readWrite on this database only.
+    # store:
+    #   enabled: true
+    #   profile: primary
+    #   database: mongo_portal
+    #   usernameFile: /etc/mongo-portal/store/username
+    #   passwordFile: /etc/mongo-portal/store/password
+    # audit:
+    #   persist: true
+    #   retention: 2160h    # 90 days
+    transfer:
+      tempDir: /var/lib/mongo-portal/transfer
+      maxImportBytes: 268435456   # 256 MiB per file
+    monitoring:
+      slowOperation: 5s
     query:
       defaultMaxTime: 10s
       maxMaxTime: 60s
@@ -63,3 +92,10 @@ data:
           mode: disabled
         plaintextApproved: false
         securityExceptionRef: ""
+        # MONGODB-OIDC (MongoDB Enterprise with oidcIdentityProviders): add it
+        # to authMechanisms and describe the server's identity provider.
+        # Redirect URI: https://<route-host>/oauth/mongodb/callback
+        # oidc:
+        #   issuer: https://REPLACE-issuer           # = oidcIdentityProviders[].issuer
+        #   clientID: REPLACE-mongodb-client-id      # = oidcIdentityProviders[].clientId
+        #   scopes: [openid, offline_access]

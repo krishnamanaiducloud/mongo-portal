@@ -37,6 +37,9 @@ type IdP struct {
 	ClientID    string
 	// ClientSecret, if set, is required at the token endpoint.
 	ClientSecret string
+	// AnyClient accepts every client id (to test what the relying party or
+	// MongoDB does with an unexpected client).
+	AnyClient bool
 	// AccessAudience is the "aud" of access tokens (what MongoDB checks).
 	AccessAudience string
 	// IDAudience overrides the ID token audience (default ClientID).
@@ -104,7 +107,7 @@ func (p *IdP) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad authorization request", http.StatusBadRequest)
 		return
 	}
-	if q.Get("client_id") != p.ClientID {
+	if q.Get("client_id") != p.ClientID && !p.AnyClient {
 		http.Error(w, "unknown client", http.StatusBadRequest)
 		return
 	}
@@ -129,7 +132,7 @@ func (p *IdP) token(w http.ResponseWriter, r *http.Request) {
 	if !basic {
 		clientID, secret = r.PostForm.Get("client_id"), r.PostForm.Get("client_secret")
 	}
-	if clientID != p.ClientID || (p.ClientSecret != "" && secret != p.ClientSecret) {
+	if (clientID != p.ClientID && !p.AnyClient) || (p.ClientSecret != "" && secret != p.ClientSecret) {
 		tokenError(w, "invalid_client")
 		return
 	}
@@ -141,7 +144,7 @@ func (p *IdP) token(w http.ResponseWriter, r *http.Request) {
 		delete(p.codes, code)
 		p.mu.Unlock()
 		sum := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
-		if !ok || time.Now().After(g.expires) || g.redirect != r.PostForm.Get("redirect_uri") ||
+		if !ok || time.Now().After(g.expires) || g.redirect != r.PostForm.Get("redirect_uri") || g.clientID != clientID ||
 			base64.RawURLEncoding.EncodeToString(sum[:]) != g.challenge {
 			tokenError(w, "invalid_grant")
 			return

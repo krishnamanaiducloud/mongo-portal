@@ -112,7 +112,12 @@ function PaletteDialog({ isOpen, onClose, onAction }: PaletteProps) {
       }
     }
     const pages: [string, string, ReactNode, string?][] = [
-      ['Databases', '/', <ListIcon key="i" />],
+      ['Dashboard', '/', <TachometerAltIcon key="i" />, 'home overview health'],
+      ['Databases', '/databases', <ListIcon key="i" />],
+      ['Import & export', '/transfer', <ListIcon key="i" />, 'import export csv json bson upload download'],
+      ['Operations', '/operations', <ServerIcon key="i" />, 'currentop killop running slow idle connections'],
+      ['Sessions administration', '/admin/sessions', <LockIcon key="i" />, 'revoke sessions users'],
+      ['Settings', '/settings', <ClipboardCheckIcon key="i" />, 'configuration oidc profiles'],
       ['Shell', activeDb ? `/shell?db=${encodeURIComponent(activeDb)}` : '/shell', <TerminalIcon key="i" />, 'mongosh console'],
       ['Monitoring', '/monitoring', <ServerIcon key="i" />, 'server replica set primary secondary connections idle size metrics'],
       ['Session & security', '/session', <LockIcon key="i" />, 'sessions logout'],

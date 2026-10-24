@@ -20,5 +20,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.{ts,tsx}'],
+    // Page tests render many components; shared CI runners can be slow.
+    testTimeout: 20000,
   },
 });

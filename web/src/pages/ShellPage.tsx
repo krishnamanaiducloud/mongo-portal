@@ -15,6 +15,7 @@ import {
   ModalHeader,
   ModalVariant,
   PageSection,
+  SearchInput,
   Spinner,
   Tab,
   Tabs,
@@ -34,13 +35,16 @@ import {
   PencilAltIcon,
   RedoIcon,
   ColumnsIcon,
+  OutlinedStarIcon,
+  StarIcon,
   TrashIcon,
 } from '@patternfly/react-icons';
 import { useSession } from '../api/hooks';
 import { tokenize } from '../lib/highlight';
 import type { DisplayError, DisplayValue } from '../sandbox/display';
 import { ShellBroker, type ConfirmDecision, type ConfirmRequest } from '../shell/broker';
-import { ShellError, ShellValue } from '../shell/ShellOutput';
+import { ShellError } from '../shell/ShellOutput';
+import { EntryResult } from '../shell/ResultTools';
 
 interface Entry {
   id: number;
@@ -102,7 +106,45 @@ const SNIPPETS: { group: string; items: Snippet[] }[] = [
       { label: 'Connections', code: 'db.serverStatus().connections' },
     ],
   },
+  {
+    group: 'Diagnostics',
+    items: [
+      { label: 'Current operations (slow first)', code: 'db.currentOp({ active: true, secs_running: { $gte: 1 } }).inprog.map(o => ({ opid: o.opid, op: o.op, ns: o.ns, secs: o.secs_running, client: o.client }))' },
+      { label: 'Replication lag', code: 'rs.printSecondaryReplicationInfo()' },
+      { label: 'Oplog window', code: 'rs.printReplicationInfo()' },
+      { label: 'WiredTiger cache', code: 'db.serverStatus().wiredTiger.cache' },
+      { label: 'Profiler status', code: 'db.getProfilingStatus()' },
+      { label: 'Slowest profiled queries', code: 'db.system.profile.find().sort({ millis: -1 }).limit(10)' },
+      { label: 'Index usage', code: 'db.getCollection("collection").aggregate([{ $indexStats: {} }])', select: 'collection' },
+      { label: 'Explain an aggregation', code: 'db.getCollection("collection").explain("executionStats").aggregate([{ $match: {} }])', select: 'collection' },
+    ],
+  },
 ];
+
+// Saved snippets are the user's own queries, kept in this browser only
+// (no credentials or results). Removing site data removes them.
+interface SavedSnippet {
+  name: string;
+  code: string;
+}
+const SAVED_KEY = 'mongo-portal-shell-snippets';
+
+function loadSaved(): SavedSnippet[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(SAVED_KEY) ?? '[]') as unknown;
+    return Array.isArray(v) ? v.filter((x): x is SavedSnippet => typeof x?.name === 'string' && typeof x?.code === 'string').slice(0, 200) : [];
+  } catch {
+    return [];
+  }
+}
+
+function storeSaved(list: SavedSnippet[]) {
+  try {
+    localStorage.setItem(SAVED_KEY, JSON.stringify(list.slice(0, 200)));
+  } catch {
+    // storage unavailable (private mode): snippets last for this page only
+  }
+}
 
 const SHORTCUTS: [string, string][] = [
   ['Enter', 'Run'],
@@ -213,6 +255,19 @@ export function ShellPage() {
   const [confirmReq, setConfirmReq] = useState<{ req: ConfirmRequest; resolve: (d: ConfirmDecision) => void } | null>(null);
   const [panel, setPanel] = useState(true);
   const [panelTab, setPanelTab] = useState<string | number>('snippets');
+  const [saved, setSaved] = useState<SavedSnippet[]>(loadSaved);
+  const [historyFilter, setHistoryFilter] = useState('');
+  const [saveName, setSaveName] = useState<string>();
+  const saveSnippet = (name: string, code: string) => {
+    const next = [{ name: name.trim() || code.slice(0, 40), code }, ...saved.filter((s) => s.code !== code)];
+    setSaved(next);
+    storeSaved(next);
+  };
+  const removeSnippet = (code: string) => {
+    const next = saved.filter((s) => s.code !== code);
+    setSaved(next);
+    storeSaved(next);
+  };
 
   const patch = useCallback((id: number, f: (e: Entry) => Entry) => {
     setEntries((es) => es.map((e) => (e.id === id ? f(e) : e)));
@@ -489,11 +544,7 @@ export function ShellPage() {
                       </span>
                     </span>
                   </div>
-                  {en.outputs.map((o, i) => (
-                    <div key={i} className="portal-shell-out">
-                      <ShellValue d={o} />
-                    </div>
-                  ))}
+                  <EntryResult outputs={en.outputs} />
                   {en.error && (
                     <div className="portal-shell-out">
                       <ShellError e={en.error} />
@@ -528,6 +579,25 @@ export function ShellPage() {
                   disabled={status !== 'ready'}
                 />
                 {completing && <div className="portal-shell-muted portal-shell-completing">completing…</div>}
+                {saveName !== undefined && (
+                  <form
+                    className="portal-shell-save"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      saveSnippet(saveName, input.trim());
+                      setSaveName(undefined);
+                      setPanelTab('snippets');
+                    }}
+                  >
+                    <TextInput aria-label="Snippet name" placeholder="Snippet name" value={saveName} onChange={(_e, v) => setSaveName(v)} autoFocus />
+                    <Button type="submit" size="sm" variant="secondary">
+                      Save
+                    </Button>
+                    <Button size="sm" variant="link" onClick={() => setSaveName(undefined)}>
+                      Cancel
+                    </Button>
+                  </form>
+                )}
                 {completions.length > 1 && (
                   <div id="shell-completions" className="portal-shell-completions" role="listbox" aria-label="Completions">
                     {completions.slice(0, 200).map((c, i) => (
@@ -546,6 +616,20 @@ export function ShellPage() {
                     ))}
                   </div>
                 )}
+              </div>
+              <div className="portal-shell-run">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => void run()}
+                  isDisabled={busy || status !== 'ready' || !input.trim()}
+                  aria-label="Run command (Enter)"
+                >
+                  Run
+                </Button>
+                <Tooltip content="Save as a snippet">
+                  <Button variant="plain" size="sm" aria-label="Save as snippet" icon={<StarIcon />} isDisabled={!input.trim()} onClick={() => setSaveName('')} />
+                </Tooltip>
               </div>
             </div>
             <div ref={endRef} />
@@ -574,6 +658,20 @@ export function ShellPage() {
             <Tabs activeKey={panelTab} onSelect={(_e, k) => setPanelTab(k)} isFilled mountOnEnter aria-label="Shell helpers">
               <Tab eventKey="snippets" title={<TabTitleText>Snippets</TabTitleText>}>
                 <div className="portal-shell-panel-body">
+                  {saved.length > 0 && (
+                    <div className="portal-shell-snippets">
+                      <div className="portal-shell-panel-heading">My snippets</div>
+                      {saved.map((s) => (
+                        <div key={s.code} className="portal-shell-saved">
+                          <button type="button" className="portal-shell-snippet" onClick={() => insert(s.code)} title={s.code}>
+                            <span>{s.name}</span>
+                            <code>{s.code.split('\n')[0]}</code>
+                          </button>
+                          <Button variant="plain" size="sm" aria-label={`Delete snippet ${s.name}`} icon={<TrashIcon />} onClick={() => removeSnippet(s.code)} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {SNIPPETS.map((g) => (
                     <div key={g.group} className="portal-shell-snippets">
                       <div className="portal-shell-panel-heading">{g.group}</div>
@@ -594,13 +692,28 @@ export function ShellPage() {
                       <HistoryIcon aria-hidden /> Commands you run appear here. History is kept only in this tab.
                     </div>
                   ) : (
-                    [...history].reverse().map((h, i) => (
-                      <button key={`${i}-${h}`} type="button" className="portal-shell-snippet portal-shell-history" onClick={() => insert(h)} title="Insert into the prompt">
-                        <code>
-                          <Highlighted code={h} />
-                        </code>
-                      </button>
-                    ))
+                    <>
+                      <SearchInput aria-label="Search history" placeholder="Search history" value={historyFilter} onChange={(_e, v) => setHistoryFilter(v)} onClear={() => setHistoryFilter('')} className="pf-v6-u-mb-sm" />
+                      {[...history]
+                        .reverse()
+                        .filter((h) => !historyFilter || h.toLowerCase().includes(historyFilter.toLowerCase()))
+                        .map((h, i) => (
+                          <div key={`${i}-${h}`} className="portal-shell-saved">
+                            <button type="button" className="portal-shell-snippet portal-shell-history" onClick={() => insert(h)} title="Insert into the prompt">
+                              <code>
+                                <Highlighted code={h} />
+                              </code>
+                            </button>
+                            <Button
+                              variant="plain"
+                              size="sm"
+                              aria-label="Save to my snippets"
+                              icon={saved.some((s) => s.code === h) ? <StarIcon className="portal-status-warning" /> : <OutlinedStarIcon />}
+                              onClick={() => (saved.some((s) => s.code === h) ? removeSnippet(h) : saveSnippet(h.slice(0, 40), h))}
+                            />
+                          </div>
+                        ))}
+                    </>
                   )}
                 </div>
               </Tab>

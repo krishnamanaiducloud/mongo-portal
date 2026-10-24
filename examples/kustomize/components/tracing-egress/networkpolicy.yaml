@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongo-portal-egress-otlp
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-portal
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: REPLACE-collector-namespace
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: REPLACE-collector-label
+      ports:
+        - port: 4317
+          protocol: TCP
+        - port: 4318
+          protocol: TCP

@@ -36,6 +36,12 @@ spec:
           type: RuntimeDefault
       topologySpreadConstraints:
         - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongo-portal
+        - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
@@ -49,6 +55,11 @@ spec:
           env:
             - name: PORTAL_SESSION_KEY_FILE
               value: /etc/mongo-portal/session/session-key
+            # Names this replica in the audit hash chain and session registry.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: GOMEMLIMIT
               value: 450MiB
           ports:
@@ -112,6 +123,14 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: transfer
+              mountPath: /var/lib/mongo-portal/transfer
+            - name: oidc
+              mountPath: /etc/mongo-portal/oidc
+              readOnly: true
+            - name: store
+              mountPath: /etc/mongo-portal/store
+              readOnly: true
       volumes:
         - name: config
           configMap:
@@ -147,3 +166,19 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
+        # Import uploads are buffered here (transfer.tempDir); size it for
+        # transfer.maxImportBytes times transfer.maxConcurrentJobs.
+        - name: transfer
+          emptyDir:
+            sizeLimit: 2Gi
+        # Optional: OIDC client secrets (keys named in identity.oidc and
+        # profiles[].oidc clientSecretFile).
+        - name: oidc
+          secret:
+            secretName: mongo-portal-oidc
+            optional: true
+        # Optional: credentials of the shared store user (username, password).
+        - name: store
+          secret:
+            secretName: mongo-portal-store
+            optional: true

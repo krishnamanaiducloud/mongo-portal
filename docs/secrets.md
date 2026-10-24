@@ -42,3 +42,19 @@ the encrypted SSO cookie and in process memory.
 If the session key is missing or unreadable, the portal starts anyway with a
 random key and logs a warning. That is acceptable for a single replica; with
 several replicas, sign-ins then work only on the pod that issued them.
+
+## Optional Secrets (0.0.2 features)
+
+| Secret | Keys | Used for | Mounted at |
+| --- | --- | --- | --- |
+| `mongo-portal-oidc` | one file per client secret, named as in `clientSecretFile` (for example `corp-client-secret`, `mongodb-client-secret`) | Confidential OIDC clients (portal sign-in or MONGODB-OIDC) | `/etc/mongo-portal/oidc` |
+| `mongo-portal-store` | `username`, `password` | The shared store account (audit trail, session registry) | `/etc/mongo-portal/store` |
+
+```bash
+oc create secret generic mongo-portal-oidc -n <portal-namespace> --from-file=corp-client-secret=./client-secret
+oc create secret generic mongo-portal-store -n <portal-namespace> --from-literal=username=mongo-portal-store --from-file=password=./store-password
+```
+
+Both are optional (the Deployment mounts them with `optional: true`). Public
+OIDC clients with PKCE need no secret. The store account needs `readWrite` on
+the store database only; it never runs user operations.

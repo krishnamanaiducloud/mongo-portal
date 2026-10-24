@@ -50,6 +50,25 @@ MongoDB credentials only; see [oauth.md](oauth.md).
 | `mode` | — | Deprecated: `openshift`, `header` or `dev`, mapped to the settings above. |
 | `developerGroups` / `sreGroups` | — | Deprecated: become `g, <group>, role:readonly` / `role:admin` RBAC lines. |
 
+### `identity.oidc.providers[]`
+
+OpenID Connect sign-in; see [oidc.md](oidc.md).
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `name` | — | DNS-label style; used in `/oauth/oidc/<name>/…` and the RBAC subject `idp:<name>`. |
+| `displayName` | name | Button text. |
+| `enabled` | `auto` | `auto`: offered while discovery succeeds; `true`: same, unavailability logged as a warning; `false`: off. |
+| `issuer` | — | Exact issuer URL (https). |
+| `clientID` / `clientSecretFile` | — / — | Client id; secret file for confidential clients (PKCE is always used). |
+| `scopes` | `[openid, profile, email]` | `openid` is always added. |
+| `usernameClaim` / `groupsClaim` | `preferred_username` / `groups` | User name falls back to `email`, then `sub`. Groups may be an array or a space/comma separated string. |
+| `requiredGroups` | — | Only members of one of these groups may sign in. |
+| `caFile` / `extraCAFiles` | — | Extra trusted CAs (plus system roots). |
+| `sessionMaxAge` | `session.absoluteTimeout` | Lifetime of a sign-in with this provider. |
+| `logoutRedirect` | `false` | Send users to the provider's `end_session_endpoint` on sign-out. |
+| `probeInterval` / `requestTimeout` | `1m` / `10s` | Discovery re-check (5× longer while healthy) and per-request timeout. |
+
 ## `rbac`
 
 Portal RBAC; see [rbac.md](rbac.md).
@@ -66,6 +85,66 @@ Portal RBAC; see [rbac.md](rbac.md).
 | Key | Default | Description |
 | --- | --- | --- |
 | `profileHealthInterval` | `30s` | Background health check of every connection profile with the unauthenticated `hello` command (no credentials). Shown on the login page and the System status page. Negative disables it. |
+| `slowOperation` | `5s` | Running operations at least this old are flagged as slow. |
+| `thresholds.replicationLagWarning` / `replicationLagCritical` | `10s` / `60s` | Replication lag alerts. |
+| `thresholds.connectionsWarnPercent` | `80` | Connections in use vs the server limit. |
+| `thresholds.cacheUsedWarnPercent` / `cacheDirtyWarnPercent` | `95` / `5` | WiredTiger cache fullness and dirty share. |
+| `thresholds.oplogWindowWarning` | `24h` | Oplog window alert. |
+| `thresholds.queueWarn` | `10` | Queued operations. |
+| `thresholds.authFailuresWarnPerPoll` | `5` | Shown on the page per refresh. |
+
+## `transfer` (import and export)
+
+See [import-export.md](import-export.md).
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `enabled` | `true` | Import and export API and page. |
+| `tempDir` | system temp | Buffer for uploads; the manifests mount an emptyDir at `/var/lib/mongo-portal/transfer`. |
+| `maxImportBytes` | `256 MiB` | Largest upload. |
+| `maxExportDocuments` | `10000000` | Largest export. |
+| `batchSize` | `500` | Documents per insert. |
+| `maxConcurrentJobs` | `2` | Imports running at once per replica (1 per user). |
+| `jobRetention` | `1h` | Finished job reports kept. |
+| `maxErrors` | `1000` | An import stops after this many rejected documents. |
+
+## `store` (shared state)
+
+Optional MongoDB database for the durable audit trail and the session
+registry, used with a dedicated account (readWrite on `database` only) that is
+never used for user operations. See [audit.md](audit.md), [sessions.md](sessions.md).
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | |
+| `profile` | — | Connection profile (hosts and TLS) of the store. |
+| `database` | `mongo_portal` | |
+| `mechanism` | `SCRAM-SHA-256` | `SCRAM-SHA-256`, `SCRAM-SHA-1` or `MONGODB-X509` (with the profile's client certificate). |
+| `authSource` | `admin` | |
+| `usernameFile` / `passwordFile` | — | Mounted credentials (Secret `mongo-portal-store`). |
+| `required` | `false` | Refuse to start when the store is unreachable; by default the portal starts and retries. |
+
+## `audit`
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `bufferSize` | `1000` | Events kept in memory per replica. |
+| `persist` | `false` | Also write events to the store (needs `store.enabled`). |
+| `retention` | `0` (keep) | TTL for stored events, for example `2160h`. |
+| `collection` | `audit_events` | |
+
+## `telemetry.tracing`
+
+See [observability.md](observability.md).
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `enabled` | `auto` | `auto`: on when `endpoint` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set. |
+| `protocol` | `http/protobuf` | Or `grpc`. |
+| `endpoint` | — | Collector URL. `http://` needs `insecure: true`. |
+| `caFile` / `headersFile` | — | CA for the collector; `key=value` header lines (for example an API key). |
+| `sampleRatio` | `1` | Ratio of new traces (parent decisions are kept). |
+| `serviceName` / `resourceAttributes` | `mongo-portal` / — | |
 
 ## `session`
 
@@ -75,6 +154,7 @@ Portal RBAC; see [rbac.md](rbac.md).
 | `secureCookie` | `true` | Only `false` with the `dev` identity. |
 | `idleTimeout` / `absoluteTimeout` | `15m` / `8h` | |
 | `maxPerUser` / `maxTotal` | `3` / `200` | Oldest session of the user is evicted at the per-user cap. |
+| `registry` / `registrySyncInterval` | `false` / `10s` | Publish session metadata to the store for every replica's inventory and revocation (needs `store.enabled`). |
 | `keyFile` | — | Key (≥ 32 bytes) for pre-login CSRF tokens and for encrypting the OpenShift sign-in and OAuth state cookies; must be the same on all replicas. If missing or unreadable the portal logs a warning and uses a random key (sign-ins then do not survive restarts or move between replicas). Env override `PORTAL_SESSION_KEY_FILE`. |
 
 ## `query`
@@ -116,7 +196,12 @@ Portal RBAC; see [rbac.md](rbac.md).
 | `uri` | — | `mongodb://` or `mongodb+srv://` hosts and non-security options. Credentials and `tls*`/`ssl*`/`auth*` options are rejected. |
 | `replicaSet` | — | Replica set name (or put `replicaSet=` in the URI). |
 | `defaultAuthSource` | `admin` | Pre-filled authentication database. |
-| `authMechanisms` | both SCRAM | Allowed: `SCRAM-SHA-256`, `SCRAM-SHA-1`. |
+| `authMechanisms` | both SCRAM | Allowed: `SCRAM-SHA-256`, `SCRAM-SHA-1`, `MONGODB-OIDC` (with `oidc`). |
+| `oidc.issuer` / `oidc.clientID` | — | MONGODB-OIDC: the identity provider the server trusts (`oidcIdentityProviders`); see [mongodb-oidc.md](mongodb-oidc.md). |
+| `oidc.scopes` | `[openid]` | Add `offline_access` for refresh tokens and an audience scope if the IdP needs one. |
+| `oidc.clientSecretFile` / `caFile` / `extraCAFiles` | — | Confidential client secret; trusted CAs for the IdP. |
+| `oidc.allowedHosts` | URI hosts | Hosts the driver may send the token to. |
+| `oidc.displayName` / `requestTimeout` | issuer host / `10s` | |
 | `readPreference` | `primary` | |
 | `connectTimeout` / `serverSelectionTimeout` / `operationTimeout` | `10s` / `10s` / `2m` | |
 | `maxPoolSize` / `maxConnIdleTime` | `5` / `5m` | Per user session. |
@@ -165,5 +250,6 @@ profiles:
 | `PORTAL_CONFIG` | Config path (alternative to `--config`). |
 | `PORTAL_LISTEN_ADDRESS`, `PORTAL_OPS_LISTEN_ADDRESS`, `PORTAL_PUBLIC_ORIGIN`, `PORTAL_SESSION_KEY_FILE` | Overrides. |
 | `PORTAL_LOG_LEVEL` | `debug`, `info` (default), `warn`, `error`. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Enables tracing (standard OTel variables, including headers/TLS). An unusable exporter configuration is logged and tracing stays off. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Enables tracing when `telemetry.tracing.endpoint` is not set (standard OTel variables, including headers/TLS). An unusable exporter configuration is logged and tracing stays off. |
+| `POD_NAME` | Names the replica in the audit chain and the session registry (set from the pod name in the manifests; defaults to the host name). |
 | `OTEL_SERVICE_NAME` | Defaults to `mongo-portal`. |

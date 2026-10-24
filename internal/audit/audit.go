@@ -143,6 +143,7 @@ type Log struct {
 	seq  int64
 
 	queue   chan Event
+	closed  bool // guarded by mu
 	done    chan struct{}
 	dropped atomic.Int64
 	written atomic.Int64
@@ -209,7 +210,18 @@ func (l *Log) Record(ctx context.Context, e Event) {
 	if l.next == 0 {
 		l.full = true
 	}
+	queued, full := l.queue != nil && !l.closed, false
+	if queued {
+		select {
+		case l.queue <- e:
+		default:
+			full = true
+		}
+	}
 	l.mu.Unlock()
+	if full {
+		l.drop(1)
+	}
 
 	l.logger.LogAttrs(ctx, slog.LevelInfo, "audit",
 		slog.Bool("audit", true),
@@ -237,13 +249,6 @@ func (l *Log) Record(ctx context.Context, e Event) {
 		slog.Int64("seq", e.Seq),
 		slog.String("hash", e.Hash),
 	)
-	if l.queue != nil {
-		select {
-		case l.queue <- e:
-		default:
-			l.drop(1)
-		}
-	}
 }
 
 func (l *Log) drop(n int) {
@@ -329,12 +334,17 @@ func (l *Log) worker() {
 	}
 }
 
-// Close flushes the sink queue. Record must not be called afterwards.
+// Close flushes the sink queue. Events recorded afterwards are logged and
+// buffered but no longer persisted.
 func (l *Log) Close() {
-	if l.queue == nil {
+	l.mu.Lock()
+	if l.queue == nil || l.closed {
+		l.mu.Unlock()
 		return
 	}
+	l.closed = true
 	close(l.queue)
+	l.mu.Unlock()
 	<-l.done
 }
 
