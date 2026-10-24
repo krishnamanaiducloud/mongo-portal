@@ -130,4 +130,17 @@ scan time; it is not proof that none exist.
 
 ## Published images
 
-See the release commit that pins 0.0.3.
+Built from a clean `git archive` of commit `b69b80c` with BuildKit for
+linux/amd64 and linux/arm64, with SBOM and `mode=max` provenance attached.
+The tags did not exist before; 0.0.1 and 0.0.2 are unchanged. The images are
+not signed (keyless signing runs in the CI release job, which needs the
+repository settings listed in the workflow).
+
+| Image | Index digest | Verified |
+| --- | --- | --- |
+| `docker.io/mohankrishna999/mongo-portal:0.0.3` | `sha256:02127f7f2b9c20e558a124174e27f55e3839c4e79e7e28f243dbf9ba22c7db2a` | pulled image reports 0.0.3 (b69b80c, go1.27.3), source and revision labels match; smoke 74 / 74 and browser e2e PASS on the published image; Trivy by digest: 1 Unknown (GO-2026-5932, VEX `not_affected`) |
+| `docker.io/mohankrishna999/mongo-portal:0.0.3-debug` | `sha256:b807320f22d75457228bd8cdb5518c794354bd7cb93b195a919b280cb9853c59` | smoke 74 / 74 (both images); Trivy by digest: 1 Unknown (same) |
+
+The prod overlay and `examples/openshift/deployment.yml` pin the production
+digest; dev uses `0.0.3-debug`, test `0.0.3`. The Helm chart has no default
+repository: set `image.repository` and `image.digest` per environment.

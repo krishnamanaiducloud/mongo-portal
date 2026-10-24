@@ -50,9 +50,9 @@ spec:
               app.kubernetes.io/name: mongo-portal
       containers:
         - name: portal
-          # mongo-portal 0.0.2, pinned by digest (multi-arch). The diagnostic
-          # variant with troubleshooting tools is ...:0.0.2-debug.
-          image: docker.io/mohankrishna999/mongo-portal@sha256:9f0fa1e290548e8a348202eb3725d11ef5085a775fe9ea0fa767fe565a08dc9d
+          # mongo-portal 0.0.3, pinned by digest (multi-arch). The diagnostic
+          # variant with troubleshooting tools is ...:0.0.3-debug.
+          image: docker.io/mohankrishna999/mongo-portal@sha256:02127f7f2b9c20e558a124174e27f55e3839c4e79e7e28f243dbf9ba22c7db2a
           imagePullPolicy: IfNotPresent
           args: ["--config=/etc/mongo-portal/config/config.yaml"]
           env:
