@@ -131,8 +131,17 @@ scan time; it is not proof that none exist.
 
 ## Published images
 
-See "Published images" in the release commit that pins 0.0.2; it records the
-index digests and the checks run on the pulled images.
+Built from a clean `git archive` of commit `0517a8f` with BuildKit for
+linux/amd64 and linux/arm64, with SBOM and `mode=max` provenance attached. The
+tags did not exist before; `latest` is not used.
+
+| Image | Index digest | Verified |
+| --- | --- | --- |
+| `docker.io/mohankrishna999/mongo-portal:0.0.2` | `sha256:9f0fa1e290548e8a348202eb3725d11ef5085a775fe9ea0fa767fe565a08dc9d` | pulled image reports 0.0.2 (0517a8f, go1.27.3), source and revision labels match, runs as an arbitrary UID with a read-only root filesystem; smoke 74 / 74 and browser e2e PASS on the published image; Trivy by digest: 1 Unknown (GO-2026-5932, above) |
+| `docker.io/mohankrishna999/mongo-portal:0.0.2-debug` | `sha256:d1c69ebffa31ee5569bfd056d7fa74124a9a52f6e9433040d1841e4f16b15462` | smoke 74 / 74 (both images); Trivy by digest: 1 Unknown (same) |
+
+The prod overlay and `examples/openshift/deployment.yml` pin the production
+digest; dev uses `0.0.2-debug`, test `0.0.2`. The 0.0.1 images are unchanged.
 
 ## Not environment-validated
 
