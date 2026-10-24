@@ -222,7 +222,7 @@ func TestSCRAMAlongsideOIDC(t *testing.T) {
 	pre := p.do("GET", "/api/v1/me", nil, nil).Result().Cookies()
 	w := p.do("POST", "/api/v1/session", pre, strings.NewReader(`{"profile":"ent","username":"scramuser","password":"scram-pw"}`),
 		"Content-Type", "application/json", "X-CSRF-Token", me["csrfToken"].(string))
-	if w.Code != 200 || decode(w)["mechanism"] != "SCRAM-SHA-256" {
+	if m := decode(w); w.Code != 200 || m["mongoUser"] != "scramuser" || !strings.HasPrefix(m["mechanism"].(string), "SCRAM") {
 		t.Fatalf("scram login: %d %s", w.Code, w.Body)
 	}
 }

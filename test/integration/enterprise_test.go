@@ -285,11 +285,9 @@ func TestOperationsAndKill(t *testing.T) {
 	defer slowClient.Disconnect(ctx)
 	done := make(chan error, 1)
 	go func() {
-		// One operation (no getMore): a $where scan counted in the server.
-		cur, err := slowClient.Database("scratch").Collection("sleepy").Aggregate(ctx, bson.A{
-			bson.D{{Key: "$match", Value: bson.D{{Key: "$where", Value: "sleep(100); return true"}}}},
-			bson.D{{Key: "$count", Value: "n"}},
-		})
+		// One operation (no getMore): the first batch covers every document.
+		cur, err := slowClient.Database("scratch").Collection("sleepy").Find(ctx, bson.D{{Key: "$where", Value: "sleep(100); return true"}},
+			options.Find().SetBatchSize(1000))
 		if err == nil {
 			for cur.Next(ctx) {
 			}
@@ -302,7 +300,8 @@ func TestOperationsAndKill(t *testing.T) {
 	mon := p.login("olga", "other", "rs", "monitor", "monitor-pw")
 	var op map[string]any
 	for range 50 {
-		_, m := mon.do("GET", "/api/v1/operations?app=it-sleeper", nil)
+		// The client's awaitable hello heartbeats are operations too; pick the query.
+		_, m := mon.do("GET", "/api/v1/operations?app=it-sleeper&ns=scratch.sleepy", nil)
 		if ops, _ := m["operations"].([]any); len(ops) > 0 {
 			op = ops[0].(map[string]any)
 			if m["allUsers"] != true {

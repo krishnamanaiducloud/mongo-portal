@@ -53,7 +53,8 @@ for _ in $(seq 1 60); do if msh --eval 'db.adminCommand({ping:1})' >/dev/null 2>
 msh --eval 'db.adminCommand({ping:1})' >/dev/null || { docker logs "mongooidc-$$" | tail -30; exit 1; }
 
 echo ">> creating users"
-docker exec -e ADMIN_PW="$ADMIN_PW" "mongooidc-$$" mongosh --quiet --tls --host mongooidc --tlsCAFile /certs/ca.crt --eval '
+# The first user is created through the localhost exception.
+docker exec -e ADMIN_PW="$ADMIN_PW" "mongooidc-$$" mongosh --quiet --tls --host localhost --tlsCAFile /certs/ca.crt --eval '
 const a = db.getSiblingDB("admin");
 a.createUser({user:"root", pwd:process.env.ADMIN_PW, roles:["root"]});
 a.auth("root", process.env.ADMIN_PW);

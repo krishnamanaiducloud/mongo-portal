@@ -670,14 +670,25 @@ func (s *Server) importFile(ctx context.Context, j *Job, sess *session.Session, 
 		}
 		return j.v.Failed < int64(maxErr)
 	}
+	// fatal holds a batch failure that ends the import (for example missing
+	// write privileges), as opposed to rejected documents.
+	fatal := ""
+	limit := fmt.Sprintf("stopped after %d rejected documents (transfer.maxErrors)", maxErr)
 	flush := func() bool {
 		if len(batch) == 0 || j.v.DryRun {
 			batch, records = batch[:0], records[:0]
 			return true
 		}
-		ok := s.writeBatch(ctx, c, j, batch, records, addErr)
+		ok, f := s.writeBatch(ctx, c, j, batch, records, addErr)
 		batch, records = batch[:0], records[:0]
+		fatal = f
 		return ok
+	}
+	stopped := func() (string, string) {
+		if fatal != "" {
+			return jobFailed, fatal
+		}
+		return jobFailed, limit
 	}
 	for n := 0; ; n++ {
 		if ctx.Err() != nil || (n%500 == 0 && sessionGone(s, sess)) {
@@ -688,7 +699,7 @@ func (s *Server) importFile(ctx context.Context, j *Job, sess *session.Session, 
 		switch {
 		case errors.Is(err, io.EOF):
 			if !flush() {
-				return jobFailed, fmt.Sprintf("stopped after %d rejected documents (transfer.maxErrors)", maxErr)
+				return stopped()
 			}
 			if ctx.Err() != nil {
 				return jobCancelled, "cancelled"
@@ -717,7 +728,7 @@ func (s *Server) importFile(ctx context.Context, j *Job, sess *session.Session, 
 		}
 		batch, records = append(batch, doc), append(records, dec.Record())
 		if len(batch) == cap(batch) && !flush() {
-			return jobFailed, fmt.Sprintf("stopped after %d rejected documents (transfer.maxErrors)", maxErr)
+			return stopped()
 		}
 	}
 }
@@ -732,8 +743,8 @@ func sessionGone(s *Server, sess *session.Session) bool {
 
 // writeBatch inserts (or upserts) one batch, unordered, recording rejected
 // documents with their input record numbers. It returns false when the
-// import must stop (too many errors or a fatal error).
-func (s *Server) writeBatch(ctx context.Context, c *mongo.Collection, j *Job, batch []bson.D, records []int64, addErr func(int64, int32, string) bool) bool {
+// import must stop, with the reason when the whole batch failed.
+func (s *Server) writeBatch(ctx context.Context, c *mongo.Collection, j *Job, batch []bson.D, records []int64, addErr func(int64, int32, string) bool) (bool, string) {
 	octx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	var err error
@@ -764,7 +775,7 @@ func (s *Server) writeBatch(ctx context.Context, c *mongo.Collection, j *Job, ba
 		}
 	}
 	if err == nil {
-		return true
+		return true, ""
 	}
 	var bwe mongo.BulkWriteException
 	if errors.As(err, &bwe) && bwe.WriteConcernError == nil {
@@ -783,14 +794,11 @@ func (s *Server) writeBatch(ctx context.Context, c *mongo.Collection, j *Job, ba
 			j.v.Inserted += int64(len(batch) - len(bwe.WriteErrors))
 			j.mu.Unlock()
 		}
-		return cont
+		return cont, ""
 	}
 	me := mongoconn.Classify(err)
 	addErr(records[0], me.Code, "batch failed: "+me.Msg)
-	j.mu.Lock()
-	j.v.Message = me.Msg
-	j.mu.Unlock()
-	return false
+	return false, me.Msg
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request, rc *reqCtx) {

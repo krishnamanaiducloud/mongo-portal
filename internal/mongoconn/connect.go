@@ -182,6 +182,9 @@ func Connect(ctx context.Context, p *config.Profile, cred Credentials, hooks Poo
 		return nil, &Error{Kind: KindAuthFailed, Msg: "MongoDB did not confirm the authenticated user"}
 	}
 	ok = true
+	if mech == "" {
+		mech = "SCRAM (negotiated)"
+	}
 	return &ConnectResult{Client: client, Status: status, Mechanism: mech, TLSEnabled: p.TLS.Mode == config.TLSEnabled, User: user, AuthSource: source}, nil
 }
 

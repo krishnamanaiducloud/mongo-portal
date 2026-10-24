@@ -149,7 +149,7 @@ func (p *IdP) token(w http.ResponseWriter, r *http.Request) {
 			tokenError(w, "invalid_grant")
 			return
 		}
-		p.issue(w, g.user, g.nonce, false)
+		p.issue(w, g.user, g.nonce, g.clientID, false)
 	case "refresh_token":
 		rt := r.PostForm.Get("refresh_token")
 		p.mu.Lock()
@@ -160,20 +160,21 @@ func (p *IdP) token(w http.ResponseWriter, r *http.Request) {
 			tokenError(w, "invalid_grant")
 			return
 		}
-		p.issue(w, u, "", true)
+		p.issue(w, u, "", clientID, true)
 	default:
 		tokenError(w, "unsupported_grant_type")
 	}
 }
 
-func (p *IdP) issue(w http.ResponseWriter, u User, nonce string, refreshed bool) {
+func (p *IdP) issue(w http.ResponseWriter, u User, nonce, client string, refreshed bool) {
 	now := time.Now()
 	access := p.sign(jwt.Claims{Issuer: p.iss(), Subject: u.Subject, Audience: jwt.Audience{p.AccessAudience},
 		IssuedAt: jwt.NewNumericDate(now), NotBefore: jwt.NewNumericDate(now.Add(-time.Minute)), Expiry: jwt.NewNumericDate(now.Add(p.TokenTTL))},
 		map[string]any{"groups": u.Groups, "preferred_username": u.Name})
+	// ID tokens are issued for the requesting client, as real providers do.
 	aud := p.IDAudience
 	if aud == "" {
-		aud = p.ClientID
+		aud = client
 	}
 	exp := now.Add(p.TokenTTL)
 	if p.ExpireIDToken {
