@@ -49,6 +49,7 @@ import {
   UsersIcon,
   KeyboardIcon,
   LayerGroupIcon,
+  LightbulbIcon,
   LockIcon,
   MoonIcon,
   SearchIcon,
@@ -408,6 +409,11 @@ function Sidebar({ me }: { me: Me }) {
             {perm('operations:get') && (
               <NavItem>
                 <NavLink to="/operations"><span className="portal-nav-icon"><CubesIcon /></span>Operations</NavLink>
+              </NavItem>
+            )}
+            {perm('monitoring:get') && (
+              <NavItem>
+                <NavLink to="/advisor"><span className="portal-nav-icon"><LightbulbIcon /></span>Performance advisor</NavLink>
               </NavItem>
             )}
             <NavItem>

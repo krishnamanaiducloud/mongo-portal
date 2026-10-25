@@ -319,6 +319,61 @@ func TestCacheManagement(t *testing.T) {
 	}
 }
 
+// Under role:mongodb, cache management follows MongoDB: users whose MongoDB
+// account administers the deployment get it, others do not; a user mapped
+// to another role does not; an explicit deny wins.
+func TestCacheFollowsMongoDBClusterAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		name, user, groups, policy string
+		clusterAdmin, want         bool
+	}{
+		{"cluster admin on role:mongodb", "olive", "others", "", true, true},
+		{"data admin only", "pete", "others", "", false, false},
+		{"cluster admin mapped to readonly", "dana", "devs", "", true, false},
+		{"explicit deny", "olive", "others", "p, role:mongodb, cache, *, *, deny\n", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(c *config.Config) { c.RBAC.Policy += "\n" + tc.policy })
+			connect := h.srv.Connect
+			h.srv.Connect = func(ctx context.Context, p *config.Profile, c mongoconn.Credentials, hk mongoconn.PoolHooks) (*mongoconn.ConnectResult, error) {
+				res, err := connect(ctx, p, c, hk)
+				if err == nil {
+					any := ""
+					actions := []string{"listDatabases", "serverStatus"}
+					if tc.clusterAdmin {
+						actions = append(actions, "replSetConfigure")
+					}
+					res.Status.AuthInfo.Privileges = []mongoconn.Privilege{
+						{Resource: mongoconn.Resource{Cluster: true}, Actions: actions},
+						{Resource: mongoconn.Resource{DB: &any, Collection: &any}, Actions: []string{"find", "insert", "createIndex", "dropDatabase"}},
+					}
+				}
+				return res, err
+			}
+			if decode(t, h.do("GET", "/api/v1/me", nil, as(tc.user, tc.groups)))["permissions"].(map[string]any)["cache:get"] != false {
+				t.Fatal("without a MongoDB session there is no MongoDB privilege to follow")
+			}
+			sc, csrf := h.login(tc.user, tc.groups)
+			perms := decode(t, h.do("GET", "/api/v1/me", nil, as(tc.user, tc.groups), withCookie(sc)))["permissions"].(map[string]any)
+			if perms["cache:get"] != tc.want || perms["cache:delete"] != tc.want {
+				t.Fatalf("permission hints: %v", perms)
+			}
+			want := http.StatusForbidden
+			if tc.want {
+				want = http.StatusOK
+			}
+			if w := h.do("GET", "/api/v1/admin/caches", nil, as(tc.user, tc.groups), withCookie(sc)); w.Code != want {
+				t.Fatalf("list caches: %d", w.Code)
+			}
+			w := h.do("POST", "/api/v1/admin/caches/invalidate", map[string]any{"caches": []string{"rbac-policy"}, "confirm": "invalidate"},
+				as(tc.user, tc.groups), withCookie(sc), withHeader("X-CSRF-Token", csrf))
+			if w.Code != want {
+				t.Fatalf("invalidate: %d %s", w.Code, w.Body)
+			}
+		})
+	}
+}
+
 func jwtWith(claims string) string {
 	return "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".c2ln"
 }

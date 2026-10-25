@@ -213,6 +213,7 @@ func (s *Server) register() {
 	s.handle("POST", v+"/admin/caches/invalidate", levelIdentity, small, s.handleInvalidateCaches)
 	s.handle("GET", v+"/server", levelSession, 0, s.handleServerInfo)
 	s.handle("GET", v+"/monitoring", levelSession, 0, s.handleMonitoring)
+	s.handle("GET", v+"/advisor", levelSession, 0, s.handleAdvisor)
 
 	s.handle("GET", v+"/databases", levelSession, 0, s.handleListDatabases)
 	s.handle("GET", v+"/databases/{db}/stats", levelSession, 0, s.handleDatabaseStats)

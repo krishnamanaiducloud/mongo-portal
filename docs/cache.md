@@ -29,8 +29,20 @@ replica serving the page: entries, last refresh and the last error. With
 - **This replica**: applied only here.
 
 Invalidation needs a typed confirmation and is audited as `cache_invalidate`
-(who, which caches, scope, errors). Built-in roles: `role:platform-admin`
-and `role:admin` may view and invalidate; others may not.
+(who, which caches, scope, errors).
+
+Who may view and invalidate:
+
+- `role:platform-admin` and `role:admin`;
+- users on `role:mongodb` (follow MongoDB) whose MongoDB account
+  administers the deployment. The portal reads this from the privileges
+  MongoDB reports for the session: a privilege on the cluster resource to
+  configure the replica set, shut down, set parameters or invalidate the
+  user cache (root, clusterAdmin, clusterManager, hostManager,
+  userAdminAnyDatabase, or custom roles granting the same). All-database
+  data roles (readWriteAnyDatabase, dbAdminAnyDatabase) and clusterMonitor do
+  not qualify, and the permission exists only while connected to MongoDB;
+- nobody else. An explicit deny rule for `cache` always wins.
 
 API: `GET /api/v1/admin/caches`, `POST /api/v1/admin/caches/invalidate`
 `{"caches": [...], "scope": "all"|"replica", "confirm": "invalidate"}`.

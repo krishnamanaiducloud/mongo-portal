@@ -17,6 +17,7 @@ applications in `examples/argocd`.
 | [configuration.md](configuration.md) | Every configuration key, TLS and non-TLS profiles |
 | [preflight.md](preflight.md) | Read-only checks of an environment: CLI, UI diagnostics, OpenShift script |
 | [cache.md](cache.md) | The portal's caches, invalidation across replicas, personal refresh and reconnect |
+| [performance-advisor.md](performance-advisor.md) | Index and constraint recommendations, what is read, security |
 | [deployment.md](deployment.md) | Step-by-step OpenShift deployment, discovery commands |
 | [oauth.md](oauth.md) | Built-in OpenShift login, passive behaviour, troubleshooting |
 | [oidc.md](oidc.md) | OpenID Connect sign-in (Entra ID, Okta, Keycloak, SAML/LDAP brokers) |

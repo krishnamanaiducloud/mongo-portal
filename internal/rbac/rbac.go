@@ -353,6 +353,19 @@ func (p *Policy) AllowedIn(subjects []string, profile string, res Resource, act 
 	return allowed
 }
 
+// Denied reports whether a deny rule of subjects matches the request. It
+// lets callers that grant access on other grounds still honour denials.
+func (p *Policy) Denied(subjects []string, profile string, res Resource, act Action, object string) bool {
+	for _, role := range p.Roles(subjects) {
+		for _, r := range p.rules[role] {
+			if r.Effect == "deny" && match(r.Resource, string(res)) && match(r.Action, string(act)) && Glob(r.Object, object) && profileMatch(r.Profile, profile) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Possible reports whether any allow rule of subjects grants action on
 // resource for some object. It is a UI hint for global controls; requests
 // are always checked with Allowed against the concrete object.

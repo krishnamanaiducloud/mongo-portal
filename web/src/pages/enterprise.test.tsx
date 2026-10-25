@@ -7,6 +7,7 @@ import { LoginPage } from './LoginPage';
 import { browser } from '../lib/nav';
 import { OperationsPage } from './OperationsPage';
 import { CachesPage } from './CachesPage';
+import { AdvisorPage } from './AdvisorPage';
 import { EntryResult, ExplainSummary, resultDocuments } from '../shell/ResultTools';
 import type { Me } from '../api/types';
 
@@ -207,5 +208,36 @@ describe('caches', () => {
     await screen.findByText('Caches invalidated');
     const post = calls.find((c) => c.url.includes('/invalidate'));
     expect(JSON.parse(post!.body!)).toEqual({ caches: ['rbac-policy'], scope: 'all', confirm: 'invalidate' });
+  });
+});
+
+describe('performance advisor', () => {
+  it('runs only on request and shows findings with suggestions', async () => {
+    const calls: string[] = [];
+    wrap(<AdvisorPage />, (url) => {
+      calls.push(url);
+      if (url.includes('/databases')) return json({ databases: [{ name: 'app', sizeOnDisk: 1, empty: false }, { name: 'admin', sizeOnDisk: 1, empty: false }] });
+      return json({
+        profile: 'prod', generatedAt: '2026-10-25T10:00:00Z', duration: '1.2s', truncated: false,
+        scanned: { databases: 1, collections: 3, queries: 12 },
+        sources: [{ name: 'Profiler (system.profile)', state: 'off', detail: 'profiling is off' }],
+        findings: [
+          { severity: 'critical', kind: 'missing_index', namespace: 'app.orders', title: 'Query scans the whole collection', detail: 'Each run reads about 2000000 documents to return 3.',
+            evidence: { occurrences: 4, query: '{"customer":"?"}' }, suggestion: 'db.getSiblingDB("app").getCollection("orders").createIndex({ "customer": 1 })' },
+          { severity: 'info', kind: 'no_constraints', namespace: 'app', title: '2 collections without constraints', detail: 'd', evidence: { collections: ['a', 'b'], total: 2 } },
+        ],
+      });
+    });
+    await screen.findByText('Analyze this deployment');
+    expect(calls.some((u) => u.includes('/advisor'))).toBe(false);
+    expect(screen.queryByRole('option', { name: 'admin' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze' }));
+    await screen.findByText('Query scans the whole collection');
+    expect(screen.getByText('{"customer":"?"}')).toBeTruthy();
+    expect(screen.getByText('db.getSiblingDB("app").getCollection("orders").createIndex({ "customer": 1 })')).toBeTruthy();
+    expect(screen.getByText(/never runs commands/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Info (1)' }));
+    expect(screen.queryByText('Query scans the whole collection')).toBeNull();
+    expect(screen.getByText('2 collections without constraints')).toBeTruthy();
   });
 });

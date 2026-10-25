@@ -1,5 +1,38 @@
 # Testing and validation report
 
+## 0.0.4 (2026-10-25)
+
+0.0.4 adds the performance advisor and lets `role:mongodb` users whose
+MongoDB account administers the deployment manage caches. Everything below
+the 0.0.4 section was re-run on the 0.0.4 code unless noted.
+
+| Area | Result |
+| --- | --- |
+| Advisor unit tests (`internal/advisor`) | pass: query values never reach shapes or findings (strings, numbers, arrays, embedded documents, `$regex`, `$elemMatch`, `$or`, `$expr`, `$where`); Equality-Sort-Range suggestions; no suggestion for `$or`/`$expr`; existing indexes not suggested again; redundant, unused (not `_id`, unique, TTL or recently started), large-document and constraint rules; slow-log and profiler parsing (find, aggregate, update, getMore); names JSON-quoted in commands |
+| Cache rule (`TestCacheFollowsMongoDBClusterAdmin`) | pass: cluster admin on `role:mongodb` allowed; data-only admin refused; cluster admin mapped to another role refused; explicit deny wins; no permission without a MongoDB session |
+| `TestClusterAdminFromRealPrivileges` (real MongoDB 8.0) | pass: root, clusterAdmin and userAdminAnyDatabase are cluster administrators; readWriteAnyDatabase + dbAdminAnyDatabase and clusterMonitor are not |
+| `TestPerformanceAdvisor` (real MongoDB 8.0) | pass: real profiler entries give a full-scan finding with `createIndex({ "card": 1, "customer": 1 })`; redundant index found; constraints finding; a secret value used in the queries is absent from the response; a user without privileges gets a partial report (200), not an error; internal databases refused |
+| Integration suite | **21 / 21 pass** |
+| MONGODB-OIDC suite (MongoDB Enterprise 7.0) | **6 / 6 pass** |
+| Kubernetes deployment (kind) | **19 / 19 pass** |
+| Go unit tests (race), vet, gofmt | pass (13 packages) |
+| Web tests | **49 / 49 pass** (advisor runs only on request, findings, suggestions, severity filter) |
+| Helm chart, Kustomize and plain manifests | valid (44 chart resources; 49 + 6 + 13 manifest resources); guardrails pass |
+| Container smoke / browser e2e | 74 / 74 · PASS |
+| govulncheck / gosec / npm audit | 0 affecting · 0 issues · 0 vulnerabilities |
+| Trivy / Grype | 1 Unknown (GO-2026-5932, VEX `not_affected`) · no vulnerabilities |
+| gitleaks | no leaks (a fake test marker named `secret` was flagged and renamed; it was never a credential) |
+| Visual check | advisor page in a browser against a seeded MongoDB with the profiler on: redundant index and constraints findings, sources reported, no values shown |
+
+Security notes for the advisor: read-only commands only (`listCollections`,
+`listIndexes`, `$indexStats`, `$collStats`, `find` on `system.profile`,
+`getLog`, `profile: -1`), run with the user's own session; RBAC
+`monitoring get` plus per-namespace visibility; two concurrent runs per
+replica, 60-second deadline, size limits; values removed at the source;
+suggestions are text and never executed; each run audited.
+
+## 0.0.3
+
 Release: **0.0.3** · Date: 2026-10-24 · Environment: Windows 10 + WSL2 Ubuntu,
 Docker 29, Go 1.27.3 (toolchain pinned in `go.mod`), Node 24, MongoDB 8.0 test
 containers, MongoDB Enterprise 7.0 for MONGODB-OIDC, kind (Kubernetes 1.35)

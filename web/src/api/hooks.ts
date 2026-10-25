@@ -8,6 +8,7 @@ import type {
   DocumentsResponse,
   EJSONDocument,
   AdminSessions,
+  AdvisorReport,
   AuditPage,
   AuditQuery,
   CachesInfo,
@@ -467,5 +468,15 @@ export function useInvalidateCaches() {
       void qc.invalidateQueries({ queryKey: keys.status });
       void qc.invalidateQueries({ queryKey: keys.profiles });
     },
+  });
+}
+
+/** The advisor runs on demand (it reads index usage, statistics and logs). */
+export function useAdvisor(db: string) {
+  return useQuery({
+    queryKey: ['advisor', db],
+    queryFn: () => api<AdvisorReport>(`/advisor${qs({ db: db || undefined })}`),
+    enabled: false,
+    retry: false,
   });
 }

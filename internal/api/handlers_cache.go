@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -153,8 +154,35 @@ func (s *Server) cacheDefs() []cacheDef {
 	}
 }
 
+// cacheAllowed: the RBAC policy grants it, or the user is on role:mongodb
+// (follow MongoDB) and the MongoDB user of the session administers the
+// deployment. An explicit deny rule always wins.
+func (s *Server) cacheAllowed(rc *reqCtx, act rbac.Action) bool {
+	if rc.p == nil {
+		return false
+	}
+	pol, subj := s.RBAC.Policy(), rc.p.Subjects()
+	if pol.Denied(subj, rc.profile(), rbac.Cache, act, "*") {
+		return false
+	}
+	if pol.AllowedIn(subj, rc.profile(), rbac.Cache, act, "*") {
+		return true
+	}
+	return rc.sess != nil && rc.sess.Status != nil && rc.sess.Status.ClusterAdmin() && slices.Contains(pol.Roles(subj), rbac.RoleMongoDB)
+}
+
+func (s *Server) authorizeCache(w http.ResponseWriter, r *http.Request, rc *reqCtx, act rbac.Action) bool {
+	if s.cacheAllowed(rc, act) {
+		return true
+	}
+	s.Metrics.AuthzDenials.WithLabelValues("portal", "rbac").Inc()
+	s.auditEvent(r, rc, "rbac_denied", audit.Denied, fmt.Sprintf("cache %s *", act))
+	writeError(w, r, http.StatusForbidden, "portal_role_forbidden", fmt.Sprintf("Your portal role does not allow %s cache", act))
+	return false
+}
+
 func (s *Server) handleCaches(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
-	if !s.authorize(w, r, rc, rbac.Cache, rbac.Get, "*") {
+	if !s.authorizeCache(w, r, rc, rbac.Get) {
 		return
 	}
 	out := []cacheView{}
@@ -164,7 +192,7 @@ func (s *Server) handleCaches(w http.ResponseWriter, r *http.Request, rc *reqCtx
 		out = append(out, v)
 	}
 	resp := map[string]any{"pod": s.Pod, "caches": out, "shared": s.Invalidations != nil,
-		"canInvalidate": s.allowed(rc, rbac.Cache, rbac.Delete, "*")}
+		"canInvalidate": s.cacheAllowed(rc, rbac.Delete)}
 	if s.Invalidations != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
@@ -212,7 +240,7 @@ func (s *Server) applyInvalidation(ctx context.Context, names []string) ([]cache
 }
 
 func (s *Server) handleInvalidateCaches(w http.ResponseWriter, r *http.Request, rc *reqCtx) {
-	if !s.authorize(w, r, rc, rbac.Cache, rbac.Delete, "*") {
+	if !s.authorizeCache(w, r, rc, rbac.Delete) {
 		return
 	}
 	var req invalidateRequest

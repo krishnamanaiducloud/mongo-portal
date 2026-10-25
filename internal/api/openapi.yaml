@@ -527,6 +527,20 @@ paths:
         "200": { $ref: "#/components/responses/OK" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /advisor:
+    get:
+      tags: [monitoring]
+      summary: >-
+        Performance advisor (monitoring get): read-only findings from index definitions and usage,
+        collection statistics, profiler entries and the slow-query log, read with the user's own
+        session. Queries appear only as shapes (values replaced by "?"); suggestions are never executed.
+      parameters:
+        - { name: db, in: query, required: false, schema: { type: string }, description: Limit to one database }
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { description: The advisor is already running }
   /admin/caches:
     get:
       tags: [identity]

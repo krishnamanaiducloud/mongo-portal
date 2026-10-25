@@ -104,6 +104,27 @@ func (s *ConnectionStatus) CapabilitiesFor(db, coll string) Capabilities {
 	}
 }
 
+// clusterAdminActions are cluster-resource actions only deployment
+// administrators hold (root, clusterAdmin, clusterManager, hostManager,
+// userAdminAnyDatabase); all-database data roles such as
+// readWriteAnyDatabase or dbAdminAnyDatabase have none of them.
+var clusterAdminActions = []string{"replSetConfigure", "shutdown", "invalidateUserCache", "setParameter"}
+
+// ClusterAdmin reports whether the MongoDB user administers the deployment,
+// judged from the privileges MongoDB reports for the session (so custom
+// roles count by what they grant, not by name).
+func (s *ConnectionStatus) ClusterAdmin() bool {
+	for _, p := range s.AuthInfo.Privileges {
+		if p.Resource.AnyResource && slices.Contains(p.Actions, "anyAction") {
+			return true
+		}
+		if p.Resource.Cluster && slices.ContainsFunc(p.Actions, func(a string) bool { return slices.Contains(clusterAdminActions, a) }) {
+			return true
+		}
+	}
+	return false
+}
+
 // matches implements MongoDB resource document semantics for a
 // non-system namespace. An empty string in a resource is a wildcard.
 func (r Resource) matches(db, coll string) bool {

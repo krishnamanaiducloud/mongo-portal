@@ -83,6 +83,9 @@ func (s *Server) globalPermissions(rc *reqCtx) map[string]bool {
 	out["audit:all"] = pol.AllowedIn(subj, prof, rbac.Audit, rbac.Get, "all")
 	out["sessions:all"] = pol.AllowedIn(subj, prof, rbac.Sessions, rbac.Get, "all")
 	out["sessions:revoke"] = pol.AllowedIn(subj, prof, rbac.Sessions, rbac.Delete, "all")
+	// Cache management also follows MongoDB cluster administration under
+	// role:mongodb (see cacheAllowed).
+	out["cache:get"], out["cache:delete"] = s.cacheAllowed(rc, rbac.Get), s.cacheAllowed(rc, rbac.Delete)
 	return out
 }
 

@@ -616,3 +616,26 @@ export interface IndexUsage {
   ops: number;
   since?: string;
 }
+
+// ---- performance advisor ----
+
+export interface AdvisorFinding {
+  severity: 'critical' | 'warning' | 'info';
+  kind: string;
+  namespace: string;
+  title: string;
+  detail: string;
+  evidence?: Record<string, unknown>;
+  /** A mongosh command to review; the portal never runs it. */
+  suggestion?: string;
+}
+
+export interface AdvisorReport {
+  profile: string;
+  generatedAt: string;
+  duration: string;
+  sources: { name: string; state: 'available' | 'partial' | 'unavailable' | 'off'; detail?: string }[];
+  findings: AdvisorFinding[];
+  scanned: Record<string, number>;
+  truncated: boolean;
+}

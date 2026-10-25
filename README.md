@@ -60,6 +60,7 @@ replica-set configuration.
 | [configuration.md](docs/configuration.md) | Every configuration key, TLS and non-TLS profiles |
 | [preflight.md](docs/preflight.md) | Read-only environment checks |
 | [cache.md](docs/cache.md) | Portal caches, refresh and reconnect |
+| [performance-advisor.md](docs/performance-advisor.md) | Index and constraint recommendations |
 | [deployment.md](docs/deployment.md) | Step-by-step OpenShift deployment, discovery commands |
 | [oauth.md](docs/oauth.md) | OpenShift login, passive behaviour, troubleshooting |
 | [oidc.md](docs/oidc.md) | OpenID Connect sign-in |
