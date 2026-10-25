@@ -24,6 +24,15 @@ the 0.0.4 section was re-run on the 0.0.4 code unless noted.
 | gitleaks | no leaks (a fake test marker named `secret` was flagged and renamed; it was never a credential) |
 | Visual check | advisor page in a browser against a seeded MongoDB with the profiler on: redundant index and constraints findings, sources reported, no values shown |
 
+Published from a clean `git archive` of commit `ac091a6` (amd64 and arm64,
+SBOM and provenance; tags were new, earlier releases unchanged; not signed —
+signing runs in the CI release job):
+
+| Image | Index digest | Verified |
+| --- | --- | --- |
+| `docker.io/mohankrishna999/mongo-portal:0.0.4` | `sha256:5867a6204be8c78222da6064a94a4386c76176953efd2b3d0fe51cd8b0189d4e` | pulled image reports 0.0.4 (ac091a6); smoke 74 / 74 and browser e2e PASS on the published image; Trivy by digest: GO-2026-5932 only (VEX `not_affected`) |
+| `docker.io/mohankrishna999/mongo-portal:0.0.4-debug` | `sha256:19df226b05bf8e0793c25ab310f9edbef3905852cf8a44a7835f4de4b8691faf` | smoke 74 / 74; Trivy by digest: same |
+
 Security notes for the advisor: read-only commands only (`listCollections`,
 `listIndexes`, `$indexStats`, `$collStats`, `find` on `system.profile`,
 `getLog`, `profile: -1`), run with the user's own session; RBAC
