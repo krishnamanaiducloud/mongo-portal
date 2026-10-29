@@ -59,6 +59,38 @@ func TestCapabilities(t *testing.T) {
 	}
 }
 
+func TestCanWrite(t *testing.T) {
+	st := &ConnectionStatus{}
+	st.AuthInfo.Privileges = []Privilege{
+		{Resource: Resource{DB: ptr("app"), Collection: ptr("")}, Actions: []string{"find"}},
+		{Resource: Resource{DB: ptr("app"), Collection: ptr("orders")}, Actions: []string{"find", "update"}},
+		{Resource: Resource{DB: ptr("logs"), Collection: ptr("system.profile")}, Actions: []string{"remove"}},
+		{Resource: Resource{Cluster: true}, Actions: []string{"insert"}},
+	}
+	switch {
+	case !st.CanWrite("app", "orders"):
+		t.Fatal("update on orders is a write")
+	case st.CanWrite("app", "users"), st.CanWrite("app", ""):
+		t.Fatal("find only is not a write")
+	case !st.CanWriteSomewhere("app"), !st.CanWriteSomewhere(""):
+		t.Fatal("orders is writable")
+	case st.CanWriteSomewhere("logs"):
+		t.Fatal("system collections do not count")
+	case st.CanWriteSomewhere("other"):
+		t.Fatal("other database")
+	}
+	reader := &ConnectionStatus{}
+	reader.AuthInfo.Privileges = []Privilege{{Resource: Resource{DB: ptr(""), Collection: ptr("")}, Actions: []string{"find", "listCollections"}}}
+	if reader.CanWriteSomewhere("") || reader.CanWrite("x", "y") {
+		t.Fatal("readAnyDatabase is read-only")
+	}
+	rwAny := &ConnectionStatus{}
+	rwAny.AuthInfo.Privileges = []Privilege{{Resource: Resource{DB: ptr(""), Collection: ptr("")}, Actions: []string{"find", "insert"}}}
+	if !rwAny.CanWrite("x", "y") || !rwAny.CanWriteSomewhere("x") {
+		t.Fatal("readWriteAnyDatabase writes everywhere")
+	}
+}
+
 func TestHasUser(t *testing.T) {
 	st := &ConnectionStatus{}
 	st.AuthInfo.AuthenticatedUsers = []UserRef{{User: "alice", DB: "admin"}}

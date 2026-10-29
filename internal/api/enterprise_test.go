@@ -374,6 +374,58 @@ func TestCacheFollowsMongoDBClusterAdmin(t *testing.T) {
 	}
 }
 
+// Import and export need MongoDB write privileges on the collection
+// (transfer.requireWritePrivilege, default on); the setting can be turned off.
+func TestTransferNeedsWritePrivilege(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		requireWrite  *bool
+		mongoActions  []string
+		wantBlocked   bool
+		wantPermsHint bool
+	}{
+		{"read-only MongoDB user", nil, []string{"find", "listCollections"}, true, false},
+		{"MongoDB user that writes", nil, []string{"find", "insert", "update", "remove"}, false, true},
+		{"read-only, requirement turned off", new(false), []string{"find"}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(c *config.Config) { c.Transfer.RequireWritePrivilege = tc.requireWrite })
+			connect := h.srv.Connect
+			h.srv.Connect = func(ctx context.Context, p *config.Profile, c mongoconn.Credentials, hk mongoconn.PoolHooks) (*mongoconn.ConnectResult, error) {
+				res, err := connect(ctx, p, c, hk)
+				if err == nil {
+					db, coll := "app", ""
+					res.Status.AuthInfo.Privileges = []mongoconn.Privilege{{Resource: mongoconn.Resource{DB: &db, Collection: &coll}, Actions: tc.mongoActions}}
+				}
+				return res, err
+			}
+			sc, csrf := h.login("olive", "others") // role:mongodb (unmapped)
+			perms := decode(t, h.do("GET", "/api/v1/me", nil, as("olive", "others"), withCookie(sc)))["permissions"].(map[string]any)
+			if perms["export:create"] != tc.wantPermsHint || perms["import:create"] != tc.wantPermsHint {
+				t.Fatalf("permission hints: export %v import %v", perms["export:create"], perms["import:create"])
+			}
+			blocked := func(w *httptest.ResponseRecorder) bool {
+				return w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "write_privilege_required")
+			}
+			for _, w := range []*httptest.ResponseRecorder{
+				h.do("GET", "/api/v1/databases/app/collections/orders/export", nil, as("olive", "others"), withCookie(sc)),
+				h.do("GET", "/api/v1/databases/app/export?format=ndjson", nil, as("olive", "others"), withCookie(sc)),
+				h.do("POST", "/api/v1/databases/app/collections/orders/import?format=ndjson", map[string]any{"x": 1}, as("olive", "others"), withCookie(sc), withHeader("X-CSRF-Token", csrf)),
+				h.do("POST", "/api/v1/databases/app/collections/orders/import/preview?format=ndjson", map[string]any{"x": 1}, as("olive", "others"), withCookie(sc), withHeader("X-CSRF-Token", csrf)),
+			} {
+				if blocked(w) != tc.wantBlocked {
+					t.Fatalf("blocked=%v: %d %s", blocked(w), w.Code, w.Body)
+				}
+			}
+			if tc.wantBlocked {
+				if ev := h.srv.Audit.Local(audit.Filter{Action: "rbac_denied"}); len(ev) == 0 || !strings.Contains(ev[0].Reason, "write privileges") {
+					t.Fatalf("denial not audited: %+v", ev)
+				}
+			}
+		})
+	}
+}
+
 func jwtWith(claims string) string {
 	return "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString([]byte(claims)) + ".c2ln"
 }

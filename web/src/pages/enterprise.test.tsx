@@ -8,6 +8,7 @@ import { browser } from '../lib/nav';
 import { OperationsPage } from './OperationsPage';
 import { CachesPage } from './CachesPage';
 import { AdvisorPage } from './AdvisorPage';
+import { TransferPage } from './TransferPage';
 import { EntryResult, ExplainSummary, resultDocuments } from '../shell/ResultTools';
 import type { Me } from '../api/types';
 
@@ -239,5 +240,29 @@ describe('performance advisor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Info (1)' }));
     expect(screen.queryByText('Query scans the whole collection')).toBeNull();
     expect(screen.getByText('2 collections without constraints')).toBeTruthy();
+  });
+});
+
+describe('import and export need write access', () => {
+  it('explains read-only access and disables the download', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).includes('/collections')) {
+        return json({ collections: [{ name: 'orders', type: 'collection', access: { portalWrite: false, portal: { find: true, export: false, import: false }, mongo: { find: true } } }] });
+      }
+      if (String(url).includes('/jobs')) return json({ jobs: [] });
+      return json({ databases: [{ name: 'app', sizeOnDisk: 1, empty: false }] });
+    }));
+    // The user's role allows export in general; this collection is read-only for them.
+    const user: Me = { ...me(), authenticated: true, hasSession: true, permissions: { 'export:create': true, 'import:create': true, 'documents:create': true } };
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/transfer?db=app&coll=orders']}>
+          <TransferPage me={user} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('Export is available to users with write access. Your access here is read-only.')).toBeTruthy();
+    const download = screen.getByText(/Download app.orders/).closest('a, button') as HTMLElement;
+    expect(download.getAttribute('aria-disabled') === 'true' || download.hasAttribute('disabled')).toBe(true);
   });
 });

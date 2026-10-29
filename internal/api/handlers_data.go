@@ -116,6 +116,11 @@ func (s *Server) access(rc *reqCtx, db, coll string) map[string]any {
 		"dropCollection":   s.allowed(rc, rbac.Collections, rbac.Delete, ns),
 		"dropDatabase":     s.allowed(rc, rbac.Databases, rbac.Delete, db),
 	}
+	// Import and export: the RBAC permission, and (by default) MongoDB
+	// write privileges on the namespace.
+	canWrite := !s.Config.TransferNeedsWrite() || caps.Insert || caps.Update || caps.Remove
+	portal["export"] = s.Config.TransferEnabled() && s.allowed(rc, rbac.Export, rbac.Create, ns) && portal["find"] && canWrite
+	portal["import"] = s.Config.TransferEnabled() && s.allowed(rc, rbac.Import, rbac.Create, ns) && portal["insert"] && canWrite
 	return map[string]any{
 		"portalWrite": portal["insert"] || portal["update"] || portal["remove"],
 		"portal":      portal,

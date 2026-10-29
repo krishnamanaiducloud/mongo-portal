@@ -170,6 +170,9 @@ export interface PortalAccess {
   createCollection: boolean;
   dropCollection: boolean;
   dropDatabase: boolean;
+  /** Bulk export and import: portal permission and MongoDB write access. */
+  export?: boolean;
+  import?: boolean;
 }
 
 export interface Access {

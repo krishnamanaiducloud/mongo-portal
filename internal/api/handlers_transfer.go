@@ -56,6 +56,34 @@ func (s *Server) transferOff(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// transferWriteOK enforces transfer.requireWritePrivilege: import and
+// export only for users whose MongoDB account may write in the namespace
+// (coll "" for a database export: somewhere in the database).
+func (s *Server) transferWriteOK(rc *reqCtx, db, coll string) bool {
+	if !s.Config.TransferNeedsWrite() {
+		return true
+	}
+	st := rc.sess.Status
+	if st == nil {
+		return false
+	}
+	if coll == "" {
+		return st.CanWriteSomewhere(db)
+	}
+	return st.CanWrite(db, coll)
+}
+
+func (s *Server) requireTransferWrite(w http.ResponseWriter, r *http.Request, rc *reqCtx, db, coll string) bool {
+	if s.transferWriteOK(rc, db, coll) {
+		return true
+	}
+	s.Metrics.AuthzDenials.WithLabelValues("portal", "transfer_write").Inc()
+	s.auditEvent(r, rc, "rbac_denied", audit.Denied, "import/export needs write privileges")
+	writeError(w, r, http.StatusForbidden, "write_privilege_required",
+		"Import and export are available to users who can write to this collection; your MongoDB user has read-only access")
+	return false
+}
+
 // exportRequest is parsed from query parameters (exports are downloads).
 type exportRequest struct {
 	format    transfer.Format
@@ -128,7 +156,7 @@ func (s *Server) handleExportCollection(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	ns := rbac.Namespace(db, coll)
-	if !s.authorize(w, r, rc, rbac.Export, rbac.Create, ns) || !s.authorize(w, r, rc, rbac.Documents, rbac.Get, ns) {
+	if !s.authorize(w, r, rc, rbac.Export, rbac.Create, ns) || !s.authorize(w, r, rc, rbac.Documents, rbac.Get, ns) || !s.requireTransferWrite(w, r, rc, db, coll) {
 		return
 	}
 	er, err := s.parseExport(r)
@@ -227,7 +255,7 @@ func (s *Server) handleExportDatabase(w http.ResponseWriter, r *http.Request, rc
 		writeError(w, r, http.StatusBadRequest, "invalid_name", "Invalid database name")
 		return
 	}
-	if !s.authorize(w, r, rc, rbac.Export, rbac.Create, db) {
+	if !s.authorize(w, r, rc, rbac.Export, rbac.Create, db) || !s.requireTransferWrite(w, r, rc, db, "") {
 		return
 	}
 	er, err := s.parseExport(r)
@@ -252,7 +280,7 @@ func (s *Server) handleExportDatabase(w http.ResponseWriter, r *http.Request, rc
 	failed := false
 	for _, sp := range specs {
 		ns := rbac.Namespace(db, sp.Name)
-		if query.SystemCollection(sp.Name) || !s.allowed(rc, rbac.Export, rbac.Create, ns) || !s.allowed(rc, rbac.Documents, rbac.Get, ns) {
+		if query.SystemCollection(sp.Name) || !s.allowed(rc, rbac.Export, rbac.Create, ns) || !s.allowed(rc, rbac.Documents, rbac.Get, ns) || !s.transferWriteOK(rc, db, sp.Name) {
 			skipped = append(skipped, sp.Name)
 			continue
 		}
@@ -502,7 +530,7 @@ func (s *Server) handleImportPreview(w http.ResponseWriter, r *http.Request, rc 
 	if !ok {
 		return
 	}
-	if !s.authorize(w, r, rc, rbac.Import, rbac.Create, rbac.Namespace(db, coll)) {
+	if !s.authorize(w, r, rc, rbac.Import, rbac.Create, rbac.Namespace(db, coll)) || !s.requireTransferWrite(w, r, rc, db, coll) {
 		return
 	}
 	o, _, err := importOptions(r)
@@ -538,7 +566,7 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request, rc *reqCtx
 		writeError(w, r, http.StatusBadRequest, "invalid_input", err.Error())
 		return
 	}
-	if !s.authorize(w, r, rc, rbac.Import, rbac.Create, ns) || !s.authorize(w, r, rc, rbac.Documents, rbac.Create, ns) {
+	if !s.authorize(w, r, rc, rbac.Import, rbac.Create, ns) || !s.authorize(w, r, rc, rbac.Documents, rbac.Create, ns) || !s.requireTransferWrite(w, r, rc, db, coll) {
 		return
 	}
 	if mode == "upsert" && !s.authorize(w, r, rc, rbac.Documents, rbac.Update, ns) {

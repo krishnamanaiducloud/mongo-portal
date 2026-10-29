@@ -3,6 +3,7 @@ package mongoconn
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -102,6 +103,39 @@ func (s *ConnectionStatus) CapabilitiesFor(db, coll string) Capabilities {
 		DBStats:          has("dbStats"),
 		CollStats:        has("collStats"),
 	}
+}
+
+var writeActions = []string{"insert", "update", "remove"}
+
+// CanWrite reports whether the MongoDB user may change documents in the
+// namespace (insert, update or remove). Collection "" asks about every
+// collection of the database (a database-wide grant).
+func (s *ConnectionStatus) CanWrite(db, coll string) bool {
+	c := s.CapabilitiesFor(db, coll)
+	return c.Insert || c.Update || c.Remove
+}
+
+// CanWriteSomewhere reports whether the user may change documents in at
+// least one collection of db ("" for any database).
+func (s *ConnectionStatus) CanWriteSomewhere(db string) bool {
+	for _, p := range s.AuthInfo.Privileges {
+		if !slices.ContainsFunc(p.Actions, func(a string) bool { return slices.Contains(writeActions, a) }) {
+			continue
+		}
+		r := p.Resource
+		if r.AnyResource {
+			return true
+		}
+		if r.Cluster || r.DB == nil || r.Collection == nil {
+			continue
+		}
+		if db == "" || *r.DB == "" || *r.DB == db {
+			if *r.Collection == "" || !strings.HasPrefix(*r.Collection, "system.") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // clusterAdminActions are cluster-resource actions only deployment

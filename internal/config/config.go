@@ -279,6 +279,17 @@ type TransferConfig struct {
 	JobRetention time.Duration `yaml:"jobRetention"`
 	// MaxErrors stops an import after this many rejected documents (1000).
 	MaxErrors int `yaml:"maxErrors"`
+	// RequireWritePrivilege offers import and export only to users whose
+	// MongoDB account may write (insert, update or remove) in the
+	// collection (default true): read-only users can browse but not export
+	// data in bulk.
+	RequireWritePrivilege *bool `yaml:"requireWritePrivilege"`
+}
+
+// TransferNeedsWrite reports whether import and export need MongoDB write
+// privileges on the collection.
+func (c *Config) TransferNeedsWrite() bool {
+	return c.Transfer.RequireWritePrivilege == nil || *c.Transfer.RequireWritePrivilege
 }
 
 // TransferEnabled reports whether import and export are enabled.

@@ -2,8 +2,8 @@ apiVersion: v2
 name: mongo-portal
 description: MongoDB management portal where every user works with their own MongoDB identity (SCRAM or MONGODB-OIDC), with OpenShift or OIDC single sign-on, RBAC and audit.
 type: application
-version: 0.0.4
-appVersion: 0.0.4
+version: 0.0.5
+appVersion: 0.0.5
 keywords: [mongodb, openshift, oidc, portal]
 home: https://github.com/krishnamanaiducloud/mongo-portal
 sources:

@@ -127,10 +127,14 @@ g, dbas, role:dbadmin
 			t.Errorf("%s %s %s %s = %v, want %v", c.subj, c.res, c.act, c.obj, got, c.want)
 		}
 	}
-	// Import is a write: read-only users may export but not import.
-	ro := mustParse(t, "g, devs, role:readonly\n", "")
-	if !ro.Allowed([]string{"devs"}, Export, Create, "app/x") || ro.Allowed([]string{"devs"}, Import, Create, "app/x") {
-		t.Error("readonly must export but not import")
+	// Bulk import and export are for users who may write: read-only users
+	// may do neither, editors may do both.
+	ro := mustParse(t, "g, devs, role:readonly\ng, writers, role:editor\n", "")
+	if ro.Allowed([]string{"devs"}, Export, Create, "app/x") || ro.Allowed([]string{"devs"}, Import, Create, "app/x") {
+		t.Error("readonly must neither export nor import")
+	}
+	if !ro.Allowed([]string{"writers"}, Export, Create, "app/x") || !ro.Allowed([]string{"writers"}, Import, Create, "app/x") {
+		t.Error("editor must export and import")
 	}
 }
 

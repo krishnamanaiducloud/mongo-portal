@@ -86,6 +86,13 @@ func (s *Server) globalPermissions(rc *reqCtx) map[string]bool {
 	// Cache management also follows MongoDB cluster administration under
 	// role:mongodb (see cacheAllowed).
 	out["cache:get"], out["cache:delete"] = s.cacheAllowed(rc, rbac.Get), s.cacheAllowed(rc, rbac.Delete)
+	// Import and export are offered only where the MongoDB user may write
+	// (transfer.requireWritePrivilege).
+	if s.Config.TransferNeedsWrite() {
+		canWrite := rc.sess != nil && rc.sess.Status != nil && rc.sess.Status.CanWriteSomewhere("")
+		out["export:create"] = out["export:create"] && canWrite
+		out["import:create"] = out["import:create"] && canWrite
+	}
 	return out
 }
 

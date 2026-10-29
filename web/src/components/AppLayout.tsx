@@ -220,7 +220,7 @@ export function AppLayout({ me }: { me: Me }) {
                   </Tooltip>
                 </ToolbarItem>
               )}
-              <ToolbarItem>
+              <ToolbarItem visibility={{ default: 'hidden', md: 'visible' }}>
                 <RolesLabel roles={roles} compact />
               </ToolbarItem>
               <ToolbarItem>
@@ -243,7 +243,7 @@ export function AppLayout({ me }: { me: Me }) {
                   popperProps={{ position: 'right' }}
                   toggle={(ref) => (
                     <MenuToggle ref={ref} variant="plainText" icon={<SourceIcon source={identity.source} />} onClick={() => setUserOpen((o) => !o)} isExpanded={userOpen}>
-                      {s ? `${s.mongoUser}${identity.source !== 'mongodb' ? ` (${identity.user})` : ''}` : identity.user}
+                      <span className="portal-user-name">{s ? `${s.mongoUser}${identity.source !== 'mongodb' ? ` (${identity.user})` : ''}` : identity.user}</span>
                     </MenuToggle>
                   )}
                 >

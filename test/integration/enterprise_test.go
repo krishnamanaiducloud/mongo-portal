@@ -251,20 +251,50 @@ func TestImportRulesAndAuthorization(t *testing.T) {
 		t.Fatalf("dry run: %v (%d -> %d)", job, before, after)
 	}
 
-	// Portal RBAC: developers (role:readonly) may export but not import.
+	// Portal RBAC: developers (role:readonly) may neither import nor export,
+	// even with a MongoDB user that could write.
 	dev := p.login("dana", "devs", "rs", "writer", "writer-pw")
 	code, body, _ := dev.raw("POST", base("scratch", "validated")+"/import?format=ndjson", strings.NewReader(`{"a":1}`))
 	if code != http.StatusForbidden || !strings.Contains(string(body), "portal_role_forbidden") {
 		t.Fatalf("developer import: %d %s", code, body)
 	}
-	if code, _, _ := dev.raw("GET", base("scratch", "validated")+"/export", nil); code != 200 {
-		t.Fatalf("developer export: %d", code)
+	if code, body, _ := dev.raw("GET", base("scratch", "validated")+"/export", nil); code != http.StatusForbidden || !strings.Contains(string(body), "portal_role_forbidden") {
+		t.Fatalf("developer export: %d %s", code, body)
 	}
-	// MongoDB privileges: a read-only MongoDB user's import fails per batch.
+	// MongoDB privileges (transfer.requireWritePrivilege, the default): a
+	// role:mongodb user whose MongoDB user only reads gets neither, and the
+	// UI does not offer them.
 	rd := p.login("rita", "other", "rs", "reader", "reader-pw")
-	job = rd.importFile(t, "app", "orders", []byte(`{"x":1}`), "format=ndjson")
-	if job["state"] != "failed" || !strings.Contains(strings.ToLower(job["message"].(string)), "not authorized") && !strings.Contains(job["message"].(string), "privileges") {
-		t.Fatalf("reader import: %v", job)
+	for _, path := range []string{base("app", "orders") + "/export", "/api/v1/databases/app/export?format=ndjson"} {
+		if code, body, _ := rd.raw("GET", path, nil); code != http.StatusForbidden || !strings.Contains(string(body), "write_privilege_required") {
+			t.Fatalf("reader export %s: %d %s", path, code, body)
+		}
+	}
+	if code, body, _ := rd.raw("POST", base("app", "orders")+"/import?format=ndjson", strings.NewReader(`{"x":1}`)); code != http.StatusForbidden || !strings.Contains(string(body), "write_privilege_required") {
+		t.Fatalf("reader import: %d %s", code, body)
+	}
+	_, me := rd.do("GET", "/api/v1/me", nil)
+	if perms := me["permissions"].(map[string]any); perms["export:create"] != false || perms["import:create"] != false {
+		t.Fatalf("reader permission hints: %v", perms)
+	}
+	_, cl := rd.do("GET", "/api/v1/databases/app/collections", nil)
+	for _, c := range cl["collections"].([]any) {
+		portal := c.(map[string]any)["access"].(map[string]any)["portal"].(map[string]any)
+		if portal["export"] != false || portal["import"] != false {
+			t.Fatalf("reader collection access: %v", portal)
+		}
+	}
+	// A role:mongodb user with write privileges may export and import.
+	wm := p.login("wendy", "other", "rs", "writer", "writer-pw")
+	if code, _, _ := wm.raw("GET", base("scratch", "validated")+"/export", nil); code != 200 {
+		t.Fatalf("writer export: %d", code)
+	}
+	_, cl = wm.do("GET", "/api/v1/databases/scratch/collections", nil)
+	for _, c := range cl["collections"].([]any) {
+		portal := c.(map[string]any)["access"].(map[string]any)["portal"].(map[string]any)
+		if c.(map[string]any)["name"] == "validated" && (portal["export"] != true || portal["import"] != true) {
+			t.Fatalf("writer collection access: %v", portal)
+		}
 	}
 	// System collections are refused.
 	if code, _, _ := w.raw("POST", base("scratch", "system.views")+"/import?format=ndjson", strings.NewReader(`{}`)); code != http.StatusForbidden {

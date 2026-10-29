@@ -1412,3 +1412,19 @@ body {
   gap: 0.5rem;
   align-items: baseline;
 }
+
+/* Phones: the header keeps only icons so it never overflows. */
+@media (max-width: 576px) {
+  .portal-user-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .portal-brand {
+    font-size: 1rem;
+  }
+}

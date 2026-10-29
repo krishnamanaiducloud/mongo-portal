@@ -25,14 +25,19 @@ export function CollectionPage() {
       <Flex alignItems={{ default: 'alignItemsCenter' }} className="pf-v6-u-mb-md">
         <Title headingLevel="h1">{coll}</Title>
         <AccessLabel access={access} />
-        <FlexItem align={{ default: 'alignRight' }}>
-          <Button variant="link" icon={<DownloadIcon />} component="a" href={`/api/v1/databases/${encodeURIComponent(db)}/collections/${encodeURIComponent(coll)}/export?format=ndjson`} download>
-            Export
-          </Button>
-          <Button variant="link" icon={<ExchangeAltIcon />} component={(props: object) => <NavLink {...props} to={`/transfer?db=${encodeURIComponent(db)}&coll=${encodeURIComponent(coll)}&tab=import`} />}>
-            Import &amp; export…
-          </Button>
-        </FlexItem>
+        {/* Bulk export and import only for users who may write here. */}
+        {(access?.portal?.export || access?.portal?.import) && (
+          <FlexItem align={{ default: 'alignRight' }}>
+            {access?.portal?.export && (
+              <Button variant="link" icon={<DownloadIcon />} component="a" href={`/api/v1/databases/${encodeURIComponent(db)}/collections/${encodeURIComponent(coll)}/export?format=ndjson`} download>
+                Export
+              </Button>
+            )}
+            <Button variant="link" icon={<ExchangeAltIcon />} component={(props: object) => <NavLink {...props} to={`/transfer?db=${encodeURIComponent(db)}&coll=${encodeURIComponent(coll)}&tab=${access?.portal?.import ? 'import' : 'export'}`} />}>
+              Import &amp; export…
+            </Button>
+          </FlexItem>
+        )}
       </Flex>
       <Tabs activeKey={tab} onSelect={(_e, k) => setTab(k)} aria-label="Collection views" mountOnEnter unmountOnExit>
         <Tab eventKey="documents" title={<TabTitleText>Documents</TabTitleText>}>

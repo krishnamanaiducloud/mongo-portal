@@ -16,7 +16,7 @@ import {
   TachometerAltIcon,
   TerminalIcon,
 } from '@patternfly/react-icons';
-import { useCollections, useDatabases } from '../api/hooks';
+import { useCollections, useDatabases, useMe } from '../api/hooks';
 import { recentItems } from '../lib/recent';
 
 export interface PaletteItem {
@@ -78,6 +78,8 @@ function PaletteDialog({ isOpen, onClose, onAction }: PaletteProps) {
   const dotted = query.includes('.') ? query.slice(0, query.indexOf('.')) : undefined;
   const collDb = dotted && dbs.data?.databases.some((d) => d.name === dotted) ? dotted : activeDb;
   const colls = useCollections(isOpen ? collDb : undefined);
+  const perms = useMe().data?.permissions;
+  const canTransfer = !!(perms?.['export:create'] || perms?.['import:create']);
 
   const items = useMemo<PaletteItem[]>(() => {
     const go = (path: string) => () => {
@@ -126,6 +128,7 @@ function PaletteDialog({ isOpen, onClose, onAction }: PaletteProps) {
       ['Audit activity', '/audit', <HistoryIcon key="i" />, 'log events'],
     ];
     for (const [label, path, icon, keywords] of pages) {
+      if (path === '/transfer' && !canTransfer) continue;
       out.push({ id: `page:${path}`, label, group: 'Go to', icon, run: go(path), keywords });
     }
     out.push(
@@ -140,7 +143,7 @@ function PaletteDialog({ isOpen, onClose, onAction }: PaletteProps) {
       .sort((a, b) => (query.trim() ? b.s - a.s : 0))
       .slice(0, 60)
       .map((x) => x.it);
-  }, [query, dbs.data, colls.data, collDb, activeDb, navigate, onAction, onClose]);
+  }, [query, dbs.data, colls.data, collDb, activeDb, navigate, onAction, onClose, canTransfer]);
 
   const active = Math.min(cursor, Math.max(0, items.length - 1));
 

@@ -25,6 +25,10 @@ the signed-in user's **own MongoDB account**.
 * **Import and export**: Extended JSON, CSV/TSV with field mapping, BSON and
   gzip, streamed exports, database archives with checksums, background
   imports with preview, dry run, progress and per-record error reports.
+  Offered only to users who can write: their MongoDB user needs insert,
+  update or remove on the collection, and their portal role must allow it
+  (`role:readonly` does not). Set `transfer.requireWritePrivilege: false` to
+  let read-only users export.
 * **Audit**: every sign-in, change, export and administrative action, with a
   per-replica hash chain, optional durable store with retention, search and
   export. **Sessions** of every replica can be listed and revoked.

@@ -37,8 +37,14 @@ trap cleanup EXIT
 if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then echo "cluster $CLUSTER already exists; refusing to reuse it" >&2; exit 1; fi
 echo ">> creating kind cluster $CLUSTER"
 kind create cluster --name "$CLUSTER" ${NODE_IMAGE:+--image "$NODE_IMAGE"} --wait 120s >/dev/null
-# The node is Ready before the bootstrap RBAC policy is: wait for it.
-for _ in $(seq 1 60); do [ "$(k auth can-i create namespaces 2>/dev/null)" = yes ] && break; sleep 2; done
+# The node is Ready before the bootstrap RBAC policy is: wait until the
+# admin may do everything, and retry setup calls that still race it.
+for _ in $(seq 1 90); do [ "$(k auth can-i '*' '*' --all-namespaces 2>/dev/null)" = yes ] && break; sleep 2; done
+kr() {
+  local i
+  for i in $(seq 1 15); do k "$@" && return 0; sleep 2; done
+  return 1
+}
 docker image inspect "$MONGO_IMAGE" >/dev/null 2>&1 || docker pull -q "$MONGO_IMAGE" >/dev/null
 docker tag "$IMAGE" mongo-portal:kind-e2e
 # kind imports every platform of an image; a multi-platform image of which
@@ -56,9 +62,9 @@ echo ">> MongoDB (namespace mongodb, not restricted: the official image starts a
 ROOT_PW="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
 READER_PW="r$(head -c 12 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
 STORE_PW="s$(head -c 12 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')"
-k create namespace mongodb >/dev/null
-k -n mongodb create secret generic root --from-literal=password="$ROOT_PW" >/dev/null
-k -n mongodb apply -f - >/dev/null <<EOF
+kr create namespace mongodb >/dev/null
+kr -n mongodb create secret generic root --from-literal=password="$ROOT_PW" >/dev/null
+kr -n mongodb apply -f - >/dev/null <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: mongodb}
@@ -96,15 +102,15 @@ k -n mongodb exec "$MPOD" -- mongosh --quiet -u root -p "$ROOT_PW" --eval "
   db.getSiblingDB('app').orders.insertMany([{_id:1},{_id:2}]);" >/dev/null
 
 echo ">> portal namespace with Pod Security restricted, secrets, TLS"
-k create namespace $NS >/dev/null
-k label namespace $NS pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest >/dev/null
-k create namespace portal-e2e-clients >/dev/null
-k create namespace outsider >/dev/null
+kr create namespace $NS >/dev/null
+kr label namespace $NS pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest >/dev/null
+kr create namespace portal-e2e-clients >/dev/null
+kr create namespace outsider >/dev/null
 docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false -v "$ROOT:/src:ro" -v "$WORK:/out" -w /src \
   "${GO_IMAGE:-cgr.dev/chainguard/go:latest}" run ./test/integration/gencerts -out /out/certs -hosts "mp-mongo-portal.$NS.svc,mp-mongo-portal,localhost" >/dev/null
-k -n $NS create secret generic mp-tls --from-file=tls.crt="$WORK/certs/server.pem" --from-file=tls.key="$WORK/certs/server.pem" >/dev/null
-k -n $NS create secret generic mongo-portal-session --from-literal=session-key="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')" >/dev/null
-k -n $NS create secret generic mongo-portal-store --from-literal=username=portalstore --from-literal=password="$STORE_PW" >/dev/null
+kr -n $NS create secret generic mp-tls --from-file=tls.crt="$WORK/certs/server.pem" --from-file=tls.key="$WORK/certs/server.pem" >/dev/null
+kr -n $NS create secret generic mongo-portal-session --from-literal=session-key="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')" >/dev/null
+kr -n $NS create secret generic mongo-portal-store --from-literal=username=portalstore --from-literal=password="$STORE_PW" >/dev/null
 
 cat > "$WORK/values.yaml" <<'EOF'
 image: {repository: mongo-portal, tag: kind-e2e, pullPolicy: Never}

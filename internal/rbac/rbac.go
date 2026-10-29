@@ -119,7 +119,6 @@ p, role:readonly, indexes, get, *, allow
 p, role:readonly, shell, use, *, allow
 p, role:readonly, server, get, *, allow
 p, role:readonly, audit, get, self, allow
-p, role:readonly, export, create, *, allow
 p, role:readonly, monitoring, get, *, allow
 p, role:readonly, sessions, get, self, allow
 p, role:readonly, sessions, delete, self, allow
@@ -132,6 +131,7 @@ p, role:editor, indexes, create, *, allow
 p, role:editor, indexes, delete, *, allow
 p, role:editor, collections, create, *, allow
 p, role:editor, import, create, *, allow
+p, role:editor, export, create, *, allow
 
 p, role:admin, *, *, *, allow
 

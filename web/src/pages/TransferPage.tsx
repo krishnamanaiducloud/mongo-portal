@@ -102,7 +102,9 @@ function ExportPanel({ me, db, coll }: { me: Me; db: string; coll: string }) {
   const [limit, setLimit] = useState('');
   const [fields, setFields] = useState('');
   const [dbFormat, setDbFormat] = useState<'ndjson' | 'json' | 'bson'>('ndjson');
-  const allowed = me.permissions['export:create'] !== false;
+  const access = useCollections(db || undefined).data?.collections.find((c) => c.name === coll)?.access;
+  // Export needs the portal permission and, by default, write access to the collection.
+  const allowed = me.permissions['export:create'] !== false && access?.portal?.export !== false;
   const isText = format === 'json' || format === 'ndjson';
   const href =
     db && coll
@@ -124,7 +126,7 @@ function ExportPanel({ me, db, coll }: { me: Me; db: string; coll: string }) {
         <Card>
           <CardTitle>Export a collection</CardTitle>
           <CardBody>
-            {!allowed && <Alert variant="info" isInline isPlain className="pf-v6-u-mb-md" title="Your portal role does not include export." />}
+            {!allowed && <Alert variant="info" isInline isPlain className="pf-v6-u-mb-md" title="Export is available to users with write access. Your access here is read-only." />}
             <Form onSubmit={(e) => e.preventDefault()}>
               <FormGroup label="Format" role="radiogroup" fieldId="ex-format" isStack>
                 {formats.map((f) => (
@@ -260,7 +262,8 @@ function ImportPanel({ me, db, coll, onStarted }: { me: Me; db: string; coll: st
   const [preview, setPreview] = useState<ImportPreview>();
   const [busy, setBusy] = useState<'preview' | 'upload' | undefined>();
   const [error, setError] = useState<string>();
-  const allowed = me.permissions['import:create'] !== false && me.permissions['documents:create'] !== false;
+  const access = useCollections(db || undefined).data?.collections.find((c) => c.name === coll)?.access;
+  const allowed = me.permissions['import:create'] !== false && me.permissions['documents:create'] !== false && access?.portal?.import !== false;
   const tabular = format === 'csv' || format === 'tsv';
   const params = () =>
     qs({
@@ -306,7 +309,7 @@ function ImportPanel({ me, db, coll, onStarted }: { me: Me; db: string; coll: st
         <Card>
           <CardTitle>Import into {db && coll ? `${db}.${coll}` : 'a collection'}</CardTitle>
           <CardBody>
-            {!allowed && <Alert variant="info" isInline isPlain className="pf-v6-u-mb-md" title="Your portal role does not include import." />}
+            {!allowed && <Alert variant="info" isInline isPlain className="pf-v6-u-mb-md" title="Import is available to users with write access. Your access here is read-only." />}
             <Form onSubmit={(e) => e.preventDefault()}>
               <FormGroup label="File" fieldId="im-file" isRequired>
                 <FileUpload

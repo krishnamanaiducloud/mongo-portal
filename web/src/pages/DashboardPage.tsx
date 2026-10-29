@@ -199,7 +199,7 @@ export function DashboardPage({ me }: { me: Me }) {
         </GridItem>
         <GridItem span={12}>
           <Grid hasGutter>
-            {quick.map((q) => (
+            {quick.filter((q) => q.to !== '/transfer' || me.permissions['export:create'] || me.permissions['import:create']).map((q) => (
               <GridItem key={q.to} md={4} xl={2}>
                 <Card isCompact isFullHeight>
                   <CardBody>
