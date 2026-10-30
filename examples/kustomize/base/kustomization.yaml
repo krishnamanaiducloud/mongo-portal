@@ -24,7 +24,7 @@ labels:
 images:
   - name: mongo-portal
     newName: docker.io/mohankrishna999/mongo-portal
-    newTag: 0.0.4
+    newTag: 0.0.5
 
 configMapGenerator:
   - name: mongo-portal-config
