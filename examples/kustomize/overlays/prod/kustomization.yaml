@@ -17,7 +17,7 @@ configMapGenerator:
       - config.yaml
 
 # Production images are pinned by immutable digest (updated by the release
-# pipeline). Current: mongo-portal 0.0.5 (commit 0901005).
+# pipeline). Current: mongo-portal 0.0.6.
 images:
   - name: docker.io/mohankrishna999/mongo-portal
     newName: docker.io/mohankrishna999/mongo-portal

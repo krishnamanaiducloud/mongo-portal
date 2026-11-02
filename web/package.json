@@ -1,7 +1,7 @@
 {
   "name": "mongo-portal-web",
   "private": true,
-  "version": "0.0.5",
+  "version": "0.0.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@mongosh/browser-runtime-core": "5.11.3",
+    "@mongosh/browser-runtime-core": "5.11.7",
     "@mongosh/types": "5.4.0",
     "@patternfly/patternfly": "^6.7.0",
     "@patternfly/react-core": "^6.7.0",

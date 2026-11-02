@@ -11,10 +11,10 @@
 # Both variants contain the identical compiled application. Base images are
 # pinned by digest; update them with Dependabot or `crane digest`.
 
-ARG NODE_IMAGE=cgr.dev/chainguard/node:latest-dev@sha256:8e34ebb063dd6af4232c01466eb3813dc94ff68d06ed624652830427e032d64b
-ARG GO_IMAGE=cgr.dev/chainguard/go:latest@sha256:df7855cc0c48551eda61a00688daab16030dea2992627270d363eb8500857050
-ARG WOLFI_IMAGE=cgr.dev/chainguard/wolfi-base:latest@sha256:81211e15a86ea1d5357f284482af45730c51de45eaf10ad9ce205d6bfc2df323
-ARG STATIC_IMAGE=cgr.dev/chainguard/static:latest@sha256:17367e4d3ae2b46c3290858e483fac09be085c92b372360fe3bf6a6150848fde
+ARG NODE_IMAGE=cgr.dev/chainguard/node:latest-dev@sha256:15c7b9f31bfbc87b78dca7adf6e8b518d7270ac425f8a346ed0e0be09fc60c53
+ARG GO_IMAGE=cgr.dev/chainguard/go:latest-dev@sha256:c33b2ae1b183ff001b7f2c29936c587ce1cd4ffaf9efb031bd81240f16a96504
+ARG WOLFI_IMAGE=cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73
+ARG STATIC_IMAGE=cgr.dev/chainguard/static:latest@sha256:fc42af33e643f20d08baf03cddcc1c02ba57052dfb02edb0d79f3fc47bcea8d9
 
 # ---------------------------------------------------------------- frontend
 FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS web
