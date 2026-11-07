@@ -11,9 +11,9 @@
 # Both variants contain the identical compiled application. Base images are
 # pinned by digest; update them with Dependabot or `crane digest`.
 
-ARG NODE_IMAGE=cgr.dev/chainguard/node:latest-dev@sha256:15c7b9f31bfbc87b78dca7adf6e8b518d7270ac425f8a346ed0e0be09fc60c53
-ARG GO_IMAGE=cgr.dev/chainguard/go:latest-dev@sha256:c33b2ae1b183ff001b7f2c29936c587ce1cd4ffaf9efb031bd81240f16a96504
-ARG WOLFI_IMAGE=cgr.dev/chainguard/wolfi-base:latest@sha256:88a20e2d017bd20cdc0cb3910de603e7bea9512a6c351a8dd3c9df212ab03d73
+ARG NODE_IMAGE=cgr.dev/chainguard/node:latest-dev@sha256:f6d993b56d7ed81f72deaf7409c79b36b1066582b93bf4fdb8e51f0a31243244
+ARG GO_IMAGE=cgr.dev/chainguard/go:latest-dev@sha256:ed70318f7b4f2e4a82e1dbc363f7a13be3a5805081f86ed9d1ec02d2694c222f
+ARG WOLFI_IMAGE=cgr.dev/chainguard/wolfi-base:latest@sha256:8509ee4351a2e501b7f98201f2e2642396e82020c61a589cacdcfe74b9de46c1
 ARG STATIC_IMAGE=cgr.dev/chainguard/static:latest@sha256:fc42af33e643f20d08baf03cddcc1c02ba57052dfb02edb0d79f3fc47bcea8d9
 
 # ---------------------------------------------------------------- frontend
@@ -58,11 +58,31 @@ SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 # hadolint ignore=DL3018,DL4006
 RUN set -eu; \
     case "${TARGETARCH}" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; *) echo "unsupported ${TARGETARCH}"; exit 1 ;; esac; \
-    mkdir -p /rootfs; \
-    apk add --root /rootfs --initdb --arch "${arch}" --no-cache --no-scripts \
-      --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories \
-      wolfi-baselayout ca-certificates-bundle tzdata glibc libgcc libstdc++ \
-      busybox curl bind-tools openssl iproute2 procps jq; \
+    # Packages come from the public Wolfi repository (the base image trusts its key). On some
+    # networks a long apk download session stalls, so the signed index and each package are
+    # fetched separately with retries (curl, build stage only), then installed offline: apk
+    # still verifies the index signature and every package checksum.
+    repo=https://packages.wolfi.dev/os; \
+    printf '%s\n' "${repo}" > /tmp/repositories; \
+    for attempt in 1 2 3 4 5; do \
+      if apk add --no-cache --repositories-file /tmp/repositories curl; then break; fi; \
+      [ "${attempt}" -lt 5 ] || exit 1; echo "apk add curl failed (attempt ${attempt}), retrying" >&2; sleep 5; \
+    done; \
+    get() { curl -fsSL --proto '=https' --retry 5 --retry-all-errors --connect-timeout 20 --max-time 300 -o "$2" "$1"; }; \
+    mkdir -p "/tmp/repo/${arch}" /tmp/sim /rootfs; \
+    get "${repo}/${arch}/APKINDEX.tar.gz" "/tmp/repo/${arch}/APKINDEX.tar.gz"; \
+    pkgs="wolfi-baselayout ca-certificates-bundle tzdata glibc libgcc libstdc++ busybox curl bind-tools openssl iproute2 procps jq"; \
+    apk add --root /tmp/sim --initdb --arch "${arch}" --keys-dir /etc/apk/keys --repository /tmp/repo \
+      --no-network --no-progress; \
+    # shellcheck disable=SC2086
+    apk add --root /tmp/sim --arch "${arch}" --keys-dir /etc/apk/keys --repository /tmp/repo \
+      --no-network --simulate --no-progress ${pkgs} \
+      | sed -n 's/^([^)]*) Installing \([^ ]*\) (\([^)]*\)).*/\1-\2.apk/p' > /tmp/files; \
+    test -s /tmp/files; \
+    while read -r f; do get "${repo}/${arch}/${f}" "/tmp/repo/${arch}/${f}"; done < /tmp/files; \
+    # shellcheck disable=SC2086
+    apk add --root /rootfs --initdb --arch "${arch}" --no-network --no-cache --no-scripts \
+      --keys-dir /etc/apk/keys --repository /tmp/repo ${pkgs}; \
     # --no-scripts skips busybox's applet-symlink trigger; create the links
     # from the target package's own applet list (paths are relative; /bin and
     # /sbin are relative symlinks to usr/bin in Wolfi).
@@ -82,9 +102,9 @@ RUN set -eu; \
 # ---------------------------------------------- debug: official mongosh CLI
 FROM --platform=$BUILDPLATFORM ${WOLFI_IMAGE} AS mongosh
 ARG TARGETARCH
-ARG MONGOSH_VERSION=2.13.0
-ARG MONGOSH_SHA256_AMD64=b2089e67641a28aa621476c4d62c69f66b9a41484baba24d8a8b1f5f96e92d0b
-ARG MONGOSH_SHA256_ARM64=a124ec6680c70ceabc61696bbd110f0da05d7c52524ed402ae9511b5aec7fe32
+ARG MONGOSH_VERSION=2.14.1
+ARG MONGOSH_SHA256_AMD64=8d24940ebe3675959b518fd41ea16b4e2182d6a75c09777db09cfa64e18834a1
+ARG MONGOSH_SHA256_ARM64=cd7f1ae986baa400b021a2c0688aa3b64d6afcc3f7ab07833417a049e0cbf98b
 SHELL ["/bin/sh", "-o", "pipefail", "-c"]
 # curl is only used in this throwaway download stage; the artifact is
 # verified against the pinned SHA-256 above. pipefail is set via SHELL.
@@ -94,8 +114,12 @@ RUN set -eu; \
       amd64) a=x64; sum="${MONGOSH_SHA256_AMD64}" ;; \
       arm64) a=arm64; sum="${MONGOSH_SHA256_ARM64}" ;; \
       *) exit 1 ;; esac; \
-    apk add --no-cache curl; \
-    curl -fsSL --proto '=https' --tlsv1.2 -o /tmp/mongosh.tgz \
+    printf '%s\n' https://packages.wolfi.dev/os > /tmp/repositories; \
+    for attempt in 1 2 3 4 5; do \
+      if apk add --no-cache --repositories-file /tmp/repositories curl; then break; fi; \
+      [ "${attempt}" -lt 5 ] || exit 1; echo "apk add failed (attempt ${attempt}), retrying" >&2; sleep 5; \
+    done; \
+    curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors --connect-timeout 20 -o /tmp/mongosh.tgz \
       "https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-${a}.tgz"; \
     echo "${sum}  /tmp/mongosh.tgz" | sha256sum -c -; \
     mkdir -p /out /tmp/x; tar -xzf /tmp/mongosh.tgz -C /tmp/x --strip-components=1; \
