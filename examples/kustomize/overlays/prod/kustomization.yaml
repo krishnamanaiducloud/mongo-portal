@@ -21,7 +21,7 @@ configMapGenerator:
 images:
   - name: docker.io/mohankrishna999/mongo-portal
     newName: docker.io/mohankrishna999/mongo-portal
-    digest: sha256:ebce7afb30abea141fc6f829cefe6089af62b9e1b61f0d789cf1d95767555158
+    digest: sha256:c66c04da1777e416350f05c85d79c8fec32c8f21fb06e723f5b1354fd37e4144
 
 patches:
   - path: patch-rbac.yaml

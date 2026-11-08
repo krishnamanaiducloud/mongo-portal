@@ -52,7 +52,7 @@ spec:
         - name: portal
           # mongo-portal 0.0.6, pinned by digest (multi-arch). The diagnostic
           # variant with troubleshooting tools is ...:0.0.6-debug.
-          image: docker.io/mohankrishna999/mongo-portal@sha256:ebce7afb30abea141fc6f829cefe6089af62b9e1b61f0d789cf1d95767555158
+          image: docker.io/mohankrishna999/mongo-portal@sha256:c66c04da1777e416350f05c85d79c8fec32c8f21fb06e723f5b1354fd37e4144
           imagePullPolicy: IfNotPresent
           args: ["--config=/etc/mongo-portal/config/config.yaml"]
           env:
