@@ -121,4 +121,5 @@ contain no package manager, and are built for `linux/amd64` and `linux/arm64`.
 The published repository is listed in each release's notes; mirror it to an
 approved registry where required.
 Releases are cut by pushing a `v<version>` tag; CI refuses to overwrite an
-existing image tag.
+existing version tag. `latest` and `latest-debug` are moving multi-architecture aliases for the
+current production and debug releases; maintainers can refresh them with `make aliases`.

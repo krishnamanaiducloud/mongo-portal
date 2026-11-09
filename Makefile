@@ -3,7 +3,7 @@ COMMIT  ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 IMAGE   ?= docker.io/mohankrishna999/mongo-portal
 PLATFORMS ?= linux/amd64,linux/arm64
 
-.PHONY: test test-go test-web integration images smoke scan render push
+.PHONY: test test-go test-web integration images smoke scan render push aliases
 
 test: test-go test-web
 
@@ -39,3 +39,8 @@ push:
 	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(IMAGE):$(VERSION) --push .
 	docker buildx build --platform $(PLATFORMS) --target debug --sbom=true --provenance=mode=max \
 	  --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(IMAGE):$(VERSION)-debug --push .
+
+# Moving aliases are intentionally separate from immutable version publication.
+aliases:
+	docker buildx imagetools create -t $(IMAGE):latest $(IMAGE):$(VERSION)
+	docker buildx imagetools create -t $(IMAGE):latest-debug $(IMAGE):$(VERSION)-debug
